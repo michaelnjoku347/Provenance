@@ -291,6 +291,7 @@ export default function App() {
           setBusy(false)
           if (payload.preview_url) setPreview(payload.preview_url)
           else if (!preview && payload.link?.image_url) setPreview(payload.link.image_url)
+          else if (!preview && /\.(jpe?g|png|webp)(\?|$)/i.test(imageUrl)) setPreview(imageUrl)
           fetch('/api/sponsors')
             .then((r) => r.json())
             .then(setSponsorStatus)
@@ -512,25 +513,11 @@ export default function App() {
             ) : null}
             {mode === 'receipt' && result ? (
               <>
-                <Hero src={currentPreview} alt="Checked image">
-                  <div className="absolute right-5 top-5 sm:right-7 sm:top-6">
-                    <Stamp verdict={result.verdict} />
+                {(currentPreview || result.preview_url) ? (
+                  <div className="h-28 shrink-0 overflow-hidden bg-[#05070a]">
+                    <img src={currentPreview || result.preview_url} alt="" className="h-full w-full object-cover" />
                   </div>
-                  <div className="absolute inset-x-0 bottom-0 p-4 sm:p-5">
-                    <div className="max-w-xl">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/70">Receipt {result.receipt_id}</div>
-                      <p className="mt-1 line-clamp-2 text-sm leading-5 text-white">{result.summary}</p>
-                      <div className="mt-3 flex items-center gap-3">
-                        <div className="h-1.5 w-36 overflow-hidden rounded-full bg-white/20">
-                          <div className="h-full rounded-full" style={{ width: `${result.confidence}%`, background: themeFor(result.verdict).color }} />
-                        </div>
-                        <span className="font-mono text-xs text-white">{result.confidence}%</span>
-                        <span className="font-mono text-[10px] uppercase tracking-wider text-white/60">Not a guarantee</span>
-                      </div>
-                    </div>
-                  </div>
-                </Hero>
-                <X402Card status={sponsorStatus} receipt={result.sponsors} onOpen={() => setX402Open(true)} />
+                ) : null}
                 <Receipt
                   result={result}
                   copied={copied}
@@ -728,18 +715,6 @@ function Hero({ src, alt, children, scanning = false }) {
   )
 }
 
-function Stamp({ verdict }) {
-  const theme = themeFor(verdict)
-  const lines = STAMPS[verdict] || STAMPS.Unverified
-  return (
-    <div className="stamp" style={{ color: theme.color }} aria-label={verdict}>
-      {lines.map((line) => (
-        <span key={line}>{line}</span>
-      ))}
-    </div>
-  )
-}
-
 function ProgressPanel({ stages }) {
   const flagCount = stages.reduce((count, stage) => count + (stage.flags?.length || 0), 0)
   return (
@@ -794,6 +769,56 @@ function ProgressPanel({ stages }) {
   )
 }
 
+function AnswerCard({ result }) {
+  const answer = result.answer || {}
+  const verdict = answer.verdict || result.verdict
+  const theme = themeFor(verdict)
+  const text = answer.text || result.summary
+  const why = (answer.why || []).slice(0, 3)
+  const sources = (answer.sources || []).slice(0, 3)
+  return (
+    <article className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="stamp !min-w-0 !px-3 !py-1 !text-lg" style={{ color: theme.color }} aria-label={verdict}>
+          {(STAMPS[verdict] || [verdict]).join(' ')}
+        </span>
+        <span className="font-mono text-sm text-mist">
+          <CountUp value={answer.confidence ?? result.confidence} />% confidence
+        </span>
+      </div>
+      <p className="mt-4 text-lg leading-7">{text}</p>
+      {answer.line ? <p className="mt-2 text-sm text-amber">{answer.line}</p> : null}
+      {why.length ? (
+        <ul className="mt-4 space-y-2">
+          {why.map((item) => (
+            <li key={item.text} className="text-sm leading-6 text-mist">
+              {item.text}
+              {item.url ? (
+                <a href={item.url} target="_blank" rel="noreferrer" className="ml-2 text-cyan hover:underline">
+                  {item.domain || hostOf(item.url)}
+                </a>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {sources.length ? (
+        <div className="mt-4 grid gap-2">
+          {sources.map((source) => (
+            <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="rounded-xl border border-line bg-ink px-3 py-2 hover:border-lime/40">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">{source.title}</span>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-cyan">{source.domain}</span>
+              </div>
+              {source.quote ? <p className="mt-1 line-clamp-2 text-sm text-mist">{source.quote}</p> : null}
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
 function StatusDot({ status }) {
   if (status === 'running') return <span className="pulse-dot mt-1.5 h-2 w-2 shrink-0 rounded-full bg-lime" />
   if (status === 'ok') {
@@ -830,6 +855,10 @@ function Receipt({
 
   return (
     <div className="fade-up space-y-3 px-4 py-4 sm:px-5 sm:pb-6">
+      <AnswerCard result={result} />
+      <details className="rounded-2xl border border-line bg-[#10161d] px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium text-mist">All sources, the trace, and what could make this wrong</summary>
+        <div className="mt-4 space-y-3">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <section className="rounded-2xl border border-line bg-[#10161d] p-4">
           <div className="flex items-end justify-between gap-3">
@@ -977,6 +1006,8 @@ function Receipt({
           </ul>
         </section>
       ) : null}
+        </div>
+      </details>
 
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -1050,16 +1081,22 @@ function Receipt({
 }
 
 const SPONSOR_CHIPS = {
-  youcom_search: 'You.com Search',
+  see: 'SEE',
+  find: 'FIND',
+  prove: 'PROVE',
+  youcom_search: 'PROVE',
   youcom_contents: 'You.com Contents',
   youcom_answer: 'You.com Answer',
-  treg: 'Treg',
+  treg: 'FIND',
   x402: 'XDC x402',
 }
 
 function sponsorStat(stage) {
   const stats = stage.stats || {}
-  if (stage.id === 'youcom_search' || stage.sponsor === 'youcom_search') {
+  if (stage.id === 'vision' || stage.sponsor === 'see') {
+    return stats.provider || (stage.status === 'running' ? '' : 'image')
+  }
+  if (stage.id === 'youcom_search' || stage.sponsor === 'youcom_search' || stage.sponsor === 'prove') {
     return stats.results != null && stage.status !== 'running' ? `${stats.results} results` : ''
   }
   if (stage.id === 'youcom_contents' || stage.sponsor === 'youcom_contents') {
@@ -1068,7 +1105,7 @@ function sponsorStat(stage) {
   if (stage.id === 'youcom_answer' || stage.sponsor === 'youcom_answer') {
     return stage.status !== 'running' ? 'cited synthesis' : ''
   }
-  if (stage.id === 'reverse_image' || stage.sponsor === 'treg') {
+  if (stage.id === 'reverse_image' || stage.sponsor === 'treg' || stage.sponsor === 'find') {
     if ((stage.detail || '').toLowerCase().includes('add key')) return 'add key'
     return stats.matches != null && stage.status !== 'running' ? `${stats.matches} first seen` : ''
   }
@@ -1079,7 +1116,7 @@ function sponsorStat(stage) {
 }
 
 function SponsorChip({ stage }) {
-  const name = SPONSOR_CHIPS[stage.sponsor] || SPONSOR_CHIPS[stage.id]
+  const name = SPONSOR_CHIPS[stage.id] || SPONSOR_CHIPS[stage.sponsor] || SPONSOR_CHIPS[stage.id]
   if (!name) return null
   const lit = stage.status === 'running' || stage.status === 'ok'
   const stat = sponsorStat(stage)
@@ -1120,30 +1157,6 @@ function SponsorStrip({ status, onX402 }) {
         Built with OpenCrawl
       </span>
     </div>
-  )
-}
-
-function X402Card({ status, receipt, onOpen }) {
-  const info = receipt?.x402 || status?.x402 || {}
-  const price = info.price_usdc || '0.02'
-  const testMode = (info.mode || 'test') !== 'live'
-  return (
-    <section className="mx-4 mt-4 rounded-2xl border border-line bg-[#10161d] p-4 sm:mx-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">XDC x402</p>
-          <h3 className="mt-1 text-sm font-semibold">API access: ${price} per check via x402 on XDC</h3>
-          <p className="mt-1 max-w-xl text-sm leading-6 text-mist">
-            {testMode
-              ? 'Test mode. XDC_AI_KEY and XDC_PAYTO are not set, so this check was not charged. The challenge below is the same shape the live paywall returns.'
-              : 'The paywall is on. A check without a payment header receives HTTP 402. A payment header is accepted and labeled unsettled in this build.'}
-          </p>
-        </div>
-        <button type="button" onClick={onOpen} className="rounded-full border border-line px-3 py-1.5 text-sm hover:border-lime/40 hover:text-lime">
-          Show 402 challenge
-        </button>
-      </div>
-    </section>
   )
 }
 

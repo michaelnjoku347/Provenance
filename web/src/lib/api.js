@@ -1,11 +1,11 @@
 export const STAGE_FALLBACK = [
   { id: 'credentials', label: 'Read EXIF and C2PA' },
   { id: 'detector', label: 'Note a weak AI-image prior' },
-  { id: 'vision', label: 'Read the claim' },
-  { id: 'youcom_search', label: 'Search You.com' },
+  { id: 'vision', label: 'SEE' },
+  { id: 'youcom_search', label: 'PROVE' },
   { id: 'youcom_contents', label: 'Read sources' },
   { id: 'youcom_answer', label: 'Cited synthesis' },
-  { id: 'reverse_image', label: 'Reverse image' },
+  { id: 'reverse_image', label: 'FIND' },
   { id: 'verdict', label: 'Judge the claim' },
   { id: 'x402', label: 'XDC x402 pay-per-verify' },
 ]

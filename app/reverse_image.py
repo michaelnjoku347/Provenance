@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+from urllib.parse import quote
+
 from app import config, httputil, sponsors
 
 
@@ -23,6 +25,7 @@ def _matches(body: dict) -> list[dict]:
                         "title": str(title)[:180],
                         "date": str(node.get("date") or node.get("page_age") or "")[:40],
                         "source": str(node.get("source") or "")[:80],
+                        "snippet": str(node.get("snippet") or node.get("excerpt") or node.get("description") or "")[:300],
                     }
                 )
             for key, value in node.items():
@@ -61,21 +64,32 @@ def lookup(image_url: str) -> dict:
             "matches": [],
         }
     started = time.perf_counter()
+    endpoint = f"https://treg.to/call/{tool}?url={quote(image_url, safe='')}&gl=us&hl=en"
+    status, body = 0, None
     try:
-        status, body = httputil.post_json(
-            f"https://treg.to/call/{tool}",
+        status, body = httputil.get_json(
+            endpoint,
             {"X-Treg-Token": config.key("TREG_API_KEY")},
-            {"url": image_url, "gl": "us", "hl": "en"},
             timeout=25,
         )
     except Exception:
-        return {
-            "status": "error",
-            "detail": "Treg reverse-image request failed.",
-            "tool": tool,
-            "matches": [],
-            "latency_ms": 0,
-        }
+        status, body = 0, None
+    if status != 200 or not isinstance(body, dict):
+        try:
+            status, body = httputil.post_json(
+                f"https://treg.to/call/{tool}",
+                {"X-Treg-Token": config.key("TREG_API_KEY")},
+                {"url": image_url, "gl": "us", "hl": "en"},
+                timeout=25,
+            )
+        except Exception:
+            return {
+                "status": "error",
+                "detail": "Treg reverse-image request failed.",
+                "tool": tool,
+                "matches": [],
+                "latency_ms": 0,
+            }
     elapsed = max(0, int((time.perf_counter() - started) * 1000))
     if status != 200 or not isinstance(body, dict):
         sponsors.record("treg", called=True, latency_ms=elapsed, matches=0, status="error")
