@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
-from app import config, httputil
+from app import config, httputil, sponsors
 
 SEARCH_URL = "https://ydc-index.io/v1/search"
 CONTENTS_URL = "https://ydc-index.io/v1/contents"
@@ -43,6 +44,7 @@ def _hit(item: dict, bucket: str) -> dict | None:
         "excerpt": _excerpt(item),
         "page_age": str(item.get("page_age") or "")[:40],
         "bucket": bucket,
+        "found_by": "You.com Search",
     }
 
 
@@ -59,7 +61,12 @@ def _parse_search(body: dict) -> list[dict]:
     return hits
 
 
+def _ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
+
+
 def _search(query: str) -> dict:
+    started = time.perf_counter()
     payload = {
         "query": query,
         "count": 10,
@@ -72,18 +79,23 @@ def _search(query: str) -> dict:
         payload.pop("freshness", None)
         status, body = httputil.post_json(SEARCH_URL, _headers(), payload, timeout=25)
     if status != 200 or not isinstance(body, dict):
-        return {"status": "error", "detail": f"You.com search returned HTTP {status}.", "hits": []}
+        elapsed = _ms(started)
+        sponsors.record("youcom_search", called=True, latency_ms=elapsed, results=0, status="error")
+        return {"status": "error", "detail": f"You.com search returned HTTP {status}.", "hits": [], "latency_ms": elapsed}
     hits = _parse_search(body)
     knowledge = ""
     for item in (body.get("results") or {}).get("knowledge") or []:
         if isinstance(item, dict) and item.get("description"):
             knowledge = str(item["description"])[:400]
             break
+    elapsed = _ms(started)
+    sponsors.record("youcom_search", called=True, latency_ms=elapsed, results=len(hits), status="ok")
     return {
         "status": "ok",
         "detail": f"{len(hits)} results.",
         "hits": hits,
         "knowledge": knowledge,
+        "latency_ms": elapsed,
     }
 
 
@@ -125,16 +137,21 @@ def read_page(url: str) -> dict:
 
 def _contents(urls: list[str]) -> dict:
     if not urls:
-        return {"status": "skipped", "detail": "No result URLs to read.", "pages": []}
+        return {"status": "skipped", "detail": "No result URLs to read.", "pages": [], "latency_ms": 0}
+    started = time.perf_counter()
     payload = {"urls": urls[:3], "formats": ["markdown", "metadata"]}
     status, body = httputil.post_json(CONTENTS_URL, _headers(), payload, timeout=25)
+    elapsed = _ms(started)
     if status != 200 or not isinstance(body, dict):
-        return {"status": "error", "detail": f"You.com contents returned HTTP {status}.", "pages": []}
+        sponsors.record("youcom_contents", called=True, latency_ms=elapsed, pages=0, status="error")
+        return {"status": "error", "detail": f"You.com contents returned HTTP {status}.", "pages": [], "latency_ms": elapsed}
     pages = _parse_pages(body)
-    return {"status": "ok", "detail": f"Read {len(pages)} pages.", "pages": pages}
+    sponsors.record("youcom_contents", called=True, latency_ms=elapsed, pages=len(pages), status="ok")
+    return {"status": "ok", "detail": f"Read {len(pages)} pages.", "pages": pages, "latency_ms": elapsed}
 
 
 def _answer(query: str) -> dict:
+    started = time.perf_counter()
     question = (
         "Is this claim true, false, or misleading based on credible reporting? "
         "Note if the timing or the context does not match. Cite sources. "
@@ -147,13 +164,16 @@ def _answer(query: str) -> dict:
             {"input": question, "research_effort": "lite"},
             timeout=25,
         )
+        elapsed = _ms(started)
         if status != 200 or not isinstance(body, dict):
+            sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=0, status="error")
             return {
                 "status": "error",
                 "detail": f"You.com research returned HTTP {status}.",
                 "text": "",
                 "citations": [],
                 "kind": "research",
+                "latency_ms": elapsed,
             }
         output = body.get("output") or {}
         content = output.get("content") if isinstance(output, dict) else ""
@@ -171,12 +191,14 @@ def _answer(query: str) -> dict:
                         else str(source.get("snippet") or "")[:400],
                     }
                 )
+        sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=len(citations), status="ok")
         return {
             "status": "ok",
             "detail": "Research API lite.",
             "text": content[:1200],
             "citations": citations,
             "kind": "research",
+            "latency_ms": elapsed,
         }
 
     status, body = httputil.post_json(
@@ -185,13 +207,16 @@ def _answer(query: str) -> dict:
         {"query": question, "freshness": "week"},
         timeout=35,
     )
+    elapsed = _ms(started)
     if status != 200 or not isinstance(body, dict):
+        sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=0, status="error")
         return {
             "status": "error",
             "detail": f"You.com answer returned HTTP {status}.",
             "text": "",
             "citations": [],
             "kind": "answer",
+            "latency_ms": elapsed,
         }
     citations = []
     for item in body.get("citations") or []:
@@ -202,12 +227,14 @@ def _answer(query: str) -> dict:
         excerpt = excerpts[0] if excerpts else ""
         if url.startswith("http"):
             citations.append({"url": url, "title": "", "excerpt": str(excerpt)[:400]})
+    sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=len(citations), status="ok")
     return {
         "status": "ok",
         "detail": "Answer API.",
         "text": str(body.get("answer") or "")[:1200],
         "citations": citations,
         "kind": "answer",
+        "latency_ms": elapsed,
     }
 
 
@@ -219,6 +246,7 @@ def _merge_pages(hits: list[dict], pages: list[dict]) -> None:
             continue
         if page.get("excerpt") and len(page["excerpt"]) > len(hit.get("excerpt") or ""):
             hit["excerpt"] = page["excerpt"]
+            hit["found_by"] = "You.com Contents"
         if page.get("title") and hit["title"] == urlparse(hit["url"]).netloc:
             hit["title"] = page["title"]
 

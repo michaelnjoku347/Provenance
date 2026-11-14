@@ -33,7 +33,7 @@ A file dated 2011 with a "this morning" claim is **Misleading or Out of Context*
 | Sponsor | Role |
 | --- | --- |
 | **You.com** (required) | Live web. `POST https://ydc-index.io/v1/search` with highlights and `knowledge: core`, then the Contents API and the Answer API (Research API when `YDC_USE_RESEARCH=1`). |
-| **OpenCrawl** (required) | Multiplayer tool for the coding agents during the build: shared session search and an agent board so the pipeline and the desk stay aligned across machines. The running checker does not call OpenCrawl. |
+| **OpenCrawl** (build tool) | [OpenCrawl](https://getopencrawl.com) is multiplayer memory for coding agents: it keeps the full session transcript and exposes `opencrawl.search` and `opencrawl.board_sync`. It was used while this desk was built so agents could find earlier decisions. It does not crawl the public web for a check, and the running server does not call it. |
 | **Treg** (optional) | Reverse image / first-seen. One `TREG_API_KEY` calls `https://treg.to/call/serper.google.serp.lens` (or `TREG_LENS_TOOL`). No key, or no public image URL, and this step skips. |
 | **XDC AI** | Pay-per-verify. Agents discover `POST /api/x402/check` and pay 0.02 USDC on XDC over [x402](https://docs.xdcai.tech/reference/x402-flow). The endpoint speaks the 402 challenge. Settlement is stubbed in this build: a payment header is accepted and labeled unsettled, so the demo never moves funds. |
 
@@ -54,6 +54,8 @@ Open http://127.0.0.1:8000 and click the three samples:
 3. **Flooding, claimed as this morning** — the file date is 2011. **Misleading or Out of Context**.
 
 You can also paste an `x.com` or `twitter.com` status URL, or an article URL, with no image. The post text becomes the claim, and the post date is used when the claim says something is happening now.
+
+While a check runs, the desk names the tool on each step: You.com Search, You.com Contents, You.com Answer, Treg reverse image, and XDC x402. Source cards say which tool found them. `GET /api/sponsors` reports whether each tool is connected and how many times this process has called it. Treg without a key shows “Treg: add key”. x402 without `XDC_AI_KEY` and `XDC_PAYTO` stays in a labeled test mode and does not charge. OpenCrawl is credited as a build tool, not as a live fetch.
 
 Put `YDC_API_KEY` in `.env` and restart. The same desk then searches the live web and lists source links. Article pages are read with You.com Contents when that key is set. Vision needs `OPENAI_API_KEY` or `GEMINI_API_KEY`. Reverse image needs `TREG_API_KEY` plus a public image URL.
 

@@ -266,6 +266,7 @@ def decide(
                     "excerpt": citation.get("excerpt") or "",
                     "page_age": "",
                     "bucket": "citation",
+                    "found_by": "You.com Answer",
                 }
             )
 
@@ -611,6 +612,7 @@ def _sources(hits: list[dict], matches: list[dict]) -> list[dict]:
                 "excerpt": (hit.get("excerpt") or "")[:320],
                 "page_age": hit.get("page_age") or "",
                 "credible": is_credible(url) and host_of(url) not in FACTCHECK,
+                "found_by": hit.get("found_by") or "You.com Search",
             }
         )
     for match in matches:
@@ -626,6 +628,7 @@ def _sources(hits: list[dict], matches: list[dict]) -> list[dict]:
                 "excerpt": "Visual match from reverse image.",
                 "page_age": match.get("date") or "",
                 "credible": is_credible(url),
+                "found_by": "Treg",
             }
         )
     return rows
@@ -657,7 +660,7 @@ def _timeline(captured, hits, matches, now: datetime) -> list[dict]:
             events.append(
                 {
                     "at": _iso(when),
-                    "label": f"Similar image: {match.get('title') or 'match'}",
+                    "label": f"Treg first seen: {match.get('title') or 'match'}",
                     "url": match.get("url") or "",
                 }
             )

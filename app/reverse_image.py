@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from app import config, httputil
+import time
+
+from app import config, httputil, sponsors
 
 
 def _matches(body: dict) -> list[dict]:
@@ -45,9 +47,10 @@ def lookup(image_url: str) -> dict:
     if not config.key("TREG_API_KEY"):
         return {
             "status": "skipped",
-            "detail": "TREG_API_KEY is not set.",
+            "detail": "Treg: add key",
             "tool": tool,
             "matches": [],
+            "latency_ms": 0,
         }
     image_url = (image_url or "").strip()
     if not image_url.startswith("http"):
@@ -57,6 +60,7 @@ def lookup(image_url: str) -> dict:
             "tool": tool,
             "matches": [],
         }
+    started = time.perf_counter()
     try:
         status, body = httputil.post_json(
             f"https://treg.to/call/{tool}",
@@ -70,18 +74,24 @@ def lookup(image_url: str) -> dict:
             "detail": "Treg reverse-image request failed.",
             "tool": tool,
             "matches": [],
+            "latency_ms": 0,
         }
+    elapsed = max(0, int((time.perf_counter() - started) * 1000))
     if status != 200 or not isinstance(body, dict):
+        sponsors.record("treg", called=True, latency_ms=elapsed, matches=0, status="error")
         return {
             "status": "error",
             "detail": f"Treg returned HTTP {status}.",
             "tool": tool,
             "matches": [],
+            "latency_ms": elapsed,
         }
     matches = _matches(body)
+    sponsors.record("treg", called=True, latency_ms=elapsed, matches=len(matches), status="ok")
     return {
         "status": "ok",
         "detail": f"{len(matches)} visual matches via {tool}.",
         "tool": tool,
         "matches": matches,
+        "latency_ms": elapsed,
     }

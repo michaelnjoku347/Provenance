@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Iterator
 
-from app import config, credentials, detector, explain, links, reverse_image, samples, store, verdict, vision, youcom
+from app import config, credentials, detector, explain, links, reverse_image, samples, sponsors, store, verdict, vision, youcom
 
 
 def _stage_error(name: str) -> dict:
@@ -36,17 +36,27 @@ def _cache_key(image: bytes, claim_text: str, image_url: str) -> str:
     return digest.hexdigest()
 
 
-def _stage(stage_id: str, status: str, label: str, detail: str = "", flags: list | None = None) -> dict:
-    return {
-        "event": "stage",
-        "data": {
-            "id": stage_id,
-            "status": status,
-            "label": label,
-            "detail": detail,
-            "flags": flags or [],
-        },
+def _stage(
+    stage_id: str,
+    status: str,
+    label: str,
+    detail: str = "",
+    flags: list | None = None,
+    sponsor: str = "",
+    stats: dict | None = None,
+) -> dict:
+    data = {
+        "id": stage_id,
+        "status": status,
+        "label": label,
+        "detail": detail,
+        "flags": flags or [],
     }
+    if sponsor:
+        data["sponsor"] = sponsor
+    if stats:
+        data["stats"] = stats
+    return {"event": "stage", "data": data}
 
 
 def _credential_flags(creds: dict) -> list[dict]:
@@ -139,6 +149,7 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
         "checked_at": checked_at,
         "receipt_id": cache_key[:12],
         "cache": {"hit": False, "key": cache_key[:12]},
+        "sponsors": sponsors.receipt(web, reverse),
     }
     if demo_id:
         result["preview_url"] = f"/api/demos/{demo_id}/image"
@@ -227,8 +238,8 @@ def iter_run(
     if query.lower().startswith("no caption"):
         query = ""
 
-    yield _stage("youcom_search", "running", "Searching You.com", "Looking for reporting, fact-checks, and similar claims.")
-    yield _stage("reverse_image", "running", "Reverse image lookup", "Only runs when a public image URL is provided.")
+    yield _stage("youcom_search", "running", "You.com Search", "Looking for reporting, fact-checks, and similar claims.", sponsor="youcom_search")
+    yield _stage("reverse_image", "running", "Treg reverse image", "Looks for where this image was first seen.", sponsor="treg")
 
     web = {"search": {}, "contents": {}, "answer": {}}
     reverse = {"status": "error", "detail": "Reverse image failed.", "matches": [], "tool": ""}
@@ -243,16 +254,51 @@ def iter_run(
             for name, data in youcom.iter_investigate(query):
                 web[name] = data
                 if name == "search":
-                    yield _stage("youcom_search", data["status"], "Searched You.com", data.get("detail") or "", _search_flags(data))
-                    yield _stage("youcom_contents", "running", "Reading sources", "Pulling page text from the top results.")
-                    yield _stage("youcom_answer", "running", "Cited synthesis", "Asking You.com to weigh the reporting.")
+                    yield _stage(
+                        "youcom_search",
+                        data["status"],
+                        "You.com Search",
+                        data.get("detail") or "",
+                        _search_flags(data),
+                        sponsor="youcom_search",
+                        stats={"latency_ms": int(data.get("latency_ms") or 0), "results": len(data.get("hits") or [])},
+                    )
+                    yield _stage(
+                        "youcom_contents",
+                        "running",
+                        "You.com Contents",
+                        "Pulling page text from the top results.",
+                        sponsor="youcom_contents",
+                    )
+                    yield _stage(
+                        "youcom_answer",
+                        "running",
+                        "You.com Answer",
+                        "Asking You.com for a cited synthesis.",
+                        sponsor="youcom_answer",
+                    )
                 elif name == "contents":
-                    yield _stage("youcom_contents", data["status"], "Read sources", data.get("detail") or "")
+                    yield _stage(
+                        "youcom_contents",
+                        data["status"],
+                        "You.com Contents",
+                        data.get("detail") or "",
+                        sponsor="youcom_contents",
+                        stats={"latency_ms": int(data.get("latency_ms") or 0), "pages": len(data.get("pages") or [])},
+                    )
                 elif name == "answer":
                     flags = []
                     if data.get("text"):
                         flags.append({"label": data["text"][:80], "tone": "neutral"})
-                    yield _stage("youcom_answer", data["status"], "Cited synthesis", data.get("detail") or data.get("text") or "", flags)
+                    yield _stage(
+                        "youcom_answer",
+                        data["status"],
+                        "You.com Answer",
+                        data.get("detail") or data.get("text") or "",
+                        flags,
+                        sponsor="youcom_answer",
+                        stats={"latency_ms": int(data.get("latency_ms") or 0), "citations": len(data.get("citations") or [])},
+                    )
             reverse = rev_f.result()
     except Exception:
         web = {
@@ -267,7 +313,27 @@ def iter_run(
 
     matches = reverse.get("matches") or []
     rev_flags = [{"label": m.get("title") or m.get("url") or "Match", "tone": "neutral"} for m in matches[:3]]
-    yield _stage("reverse_image", reverse["status"], "Reverse image", reverse.get("detail") or "", rev_flags)
+    if not matches and reverse.get("status") == "skipped" and "add key" in (reverse.get("detail") or ""):
+        rev_flags = [{"label": "Treg: add key", "tone": "neutral"}]
+    yield _stage(
+        "reverse_image",
+        reverse["status"],
+        "Treg reverse image",
+        reverse.get("detail") or "",
+        rev_flags,
+        sponsor="treg",
+        stats={"latency_ms": int(reverse.get("latency_ms") or 0), "matches": len(matches)},
+    )
+    paywall = config.paywall_on()
+    yield _stage(
+        "x402",
+        "ok" if paywall else "skipped",
+        "XDC x402",
+        "Pay-per-verify is armed." if paywall else "Test mode. This desk check is not charged.",
+        [{"label": "Live" if paywall else "Test mode", "tone": "neutral"}],
+        sponsor="x402",
+        stats={"mode": "live" if paywall else "test", "price_usdc": sponsors.receipt({}, {}).get("x402", {}).get("price_usdc", "0.02")},
+    )
 
     yield _stage("verdict", "running", "Judging the claim", "Comparing sources and dates with what the claim says.")
     result = _assemble(
