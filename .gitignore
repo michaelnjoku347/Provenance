@@ -221,3 +221,10 @@ __marimo__/
 
 # Provenance runtime receipts (regenerated locally; do not commit)
 cache/
+
+# Node / Vite
+web/node_modules/
+
+# Keep the built frontend so the API can serve it without npm.
+!web/dist/
+!web/dist/**
