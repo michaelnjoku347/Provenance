@@ -1,4 +1,4 @@
-"""Treg calls. Each one times out at 15s and never raises."""
+"""Treg calls. Each one stops at the check deadline and never raises."""
 
 from __future__ import annotations
 
@@ -8,8 +8,12 @@ import time
 
 from app import config, httputil, sponsors
 
-_TIMEOUT = 25.0
 _COMMENT_KEYS = ("tweet_id", "id", "status_id", "post_id", "conversation_id")
+
+
+def _timeout() -> float:
+    """One Treg call may use the whole check budget, and must not run longer than it."""
+    return config.check_deadline_s()
 
 
 def _ms(started: float) -> int:
@@ -34,7 +38,7 @@ def call(tool: str, body: dict, sponsor: str) -> dict:
             f"https://treg.to/call/{tool}",
             {"X-Treg-Token": config.key("TREG_API_KEY")},
             body,
-            timeout=_TIMEOUT,
+            timeout=_timeout(),
         )
     except Exception:
         elapsed = _ms(started)

@@ -79,7 +79,7 @@ def lookup(image_url: str) -> dict:
             f"https://treg.to/call/{tool}",
             {"X-Treg-Token": config.key("TREG_API_KEY")},
             {"url": image_url, "gl": "us", "hl": "en"},
-            timeout=25,
+            timeout=config.check_deadline_s(),
         )
     except Exception:
         return {
