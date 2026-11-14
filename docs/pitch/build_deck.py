@@ -190,7 +190,7 @@ def chrome(n: int, section: str):
         hrule(96, 72, 1728),
         text(96, 32, 600, 32, "PROVENANCE", size=11, color=PAPER, weight="bold", tracking=0.2, anchor="middle"),
         text(520, 32, 900, 32, section.upper(), size=11, color=MIST, weight="medium", tracking=0.2, anchor="middle"),
-        text(1424, 32, 400, 32, f"{n} / 8", size=11, color=MIST, weight="medium", align="right", anchor="middle", tracking=0.1),
+        text(1424, 32, 400, 32, f"{n} / {TOTAL}", size=11, color=MIST, weight="medium", align="right", anchor="middle", tracking=0.1),
     ]
 
 
@@ -202,6 +202,22 @@ def badge(x, y, label, color, size=16, h=52):
 
 
 # ---------- slides ----------
+
+TOTAL = 11
+
+
+def bullets(x, y, w, items, size=22, gap=28, color=PAPER):
+    """Stack short bullets; returns (shapes, bottom y)."""
+    out = []
+    px = size * 2
+    for item in items:
+        lines = wrap(item, font("regular", px), w - 40, 0)
+        h = int(len(lines) * px * 1.3)
+        out += [rect(x, y + int(px * 0.42), 14, 14, fill=LIME, radius=2),
+                text(x + 40, y, w - 40, h, item, size=size, color=color, spacing=1.3)]
+        y += h + gap
+    return out, y
+
 
 def slide_title():
     s = [rect(0, 0, W, H, fill=BG_FILL)]
@@ -216,87 +232,123 @@ def slide_title():
         text(96, 900, 860, 40, "Ground Truth hackathon, You.com  ·  New York, Nov 14, 2026", size=13, color=MIST),
         text(1010, 806, 900, 36, "The desk, live. A claim checker for images, X posts and article links.", size=13, color=MIST),
     ]
-    notes = ("I'm Michael. This is Provenance. You give it a viral image, an X post or an article link, "
+    notes = ("I'm Michael, and this is Provenance. You give it a viral image, an X post or an article link, "
              "and it tells you whether the claim is true, with the sources to prove it.")
     return s, notes
 
 
 def slide_problem():
     s = chrome(2, "The problem")
-    img = cover(SAMPLES / "copacabana.jpg", 1000, 667, "s2-copa", focus=(0, 0))
-    s += [
-        text(96, 150, 700, 520, "The photo is real. The caption isn't.", size=64, weight="bold", spacing=1.04),
-        text(96, 700, 640, 120, "Posts like this spread faster than any fact-check can catch them.", size=20, color=MIST, spacing=1.4),
-        image(824, 150, 1000, 667, img),
-        hrule(824, 845, 1000),
-        text(824, 864, 1000, 40, "SHARED AS  \u201cTrump's May 11 rally in Wildwood, New Jersey.\u201d", size=14, color=PAPER, weight="semibold"),
-        text(824, 908, 1000, 40, "Actually Copacabana beach, Rio. Reuters fact check, May 14, 2024.", size=14, color=MIST),
-    ]
-    notes = ("Here's the problem. This crowd photo is real. It went around as a Trump rally in New Jersey. "
-             "It's Copacabana beach. The picture isn't fake, the story attached to it is, and people can't tell.")
+    img = cover(OUT / "img/copacabana-crowd.jpg", 1000, 640, "s2-copa", focus=(0.5, 0.45))
+    s += [text(96, 150, 680, 330, "Viral posts outrun the fact-checks.", size=54, weight="bold", spacing=1.04)]
+    b, _ = bullets(96, 520, 660, ["Real photos get false captions.", "They spread before anyone checks.",
+                                  "Readers can't see what's behind them."])
+    s += b
+    s += [image(824, 150, 1000, 640, img),
+          hrule(824, 812, 1000),
+          text(824, 830, 1000, 36, "Copacabana beach, Rio de Janeiro.", size=15, weight="semibold"),
+          text(824, 872, 1000, 60, "A photo of this beach went viral as Trump's May 11 rally in Wildwood, NJ. Reuters fact check, May 14, 2024.", size=13, color=MIST, spacing=1.35),
+          text(824, 940, 1000, 30, "Photo: CHr0m4tiko0, CC BY-SA 4.0, Wikimedia Commons (not the viral image).", size=10, color=MIST)]
+    notes = ("Most misleading posts don't use fake photos. They use a real photo with a false caption, "
+             "like a Copacabana beach crowd shared as a Trump rally in New Jersey. It spreads before anyone can check it.")
+    return s, notes
+
+
+def slide_inspiration():
+    s = chrome(3, "Inspiration")
+    s += [text(96, 150, 860, 320, "AI detectors miss the real lie.", size=48, weight="bold", spacing=1.04)]
+    b, _ = bullets(96, 520, 800, ["The Copacabana photo was shared as a Trump rally.",
+                                  "A detector would call the photo real. It is. The claim is false.",
+                                  "So Provenance checks the claim and shows the receipts."])
+    s += b
+    x0, w0 = 1040, 784
+    rows = [("AI-IMAGE DETECTOR", "Is this picture fake?", "REAL PHOTO", MIST),
+            ("PROVENANCE", "Is this claim true?", "MISLEADING", AMBER)]
+    for i, (who, q, v, c) in enumerate(rows):
+        y = 200 + i * 300
+        s += [hrule(x0, y, w0),
+              text(x0, y + 36, w0, 30, who, size=12, color=MIST, weight="bold", tracking=0.16),
+              text(x0, y + 84, w0, 60, q, size=30, weight="semibold")]
+        bb, _ = badge(x0, y + 170, v, c, size=15, h=52)
+        s += bb
+    s.append(hrule(x0, 800, w0))
+    notes = ("The photo wasn't fake, so an AI-image detector wouldn't help; the caption was the lie. "
+             "That's why Provenance checks the claim against credible sources and shows its receipts.")
     return s, notes
 
 
 def slide_what():
-    s = chrome(3, "What it does")
+    s = chrome(4, "What it does")
     form = shot((0, 40, 390, 520), "form")
-    s += [
-        image(96, 140, 546, 672, form),
-        rect(96, 140, 546, 672, line=RULE, lw=2),
-        text(96, 830, 560, 40, "The input: a claim, a link, an optional image.", size=13, color=MIST),
-        text(760, 140, 1064, 260, "Ask about anything you saw online. Get one answer.", size=40, weight="bold", spacing=1.05),
-    ]
-    rows = [("True", LIME, "Credible sources back it."), ("False", ROSE, "Sources contradict it."),
-            ("Misleading", AMBER, "Real thing, wrong context."), ("Unverified", MIST, "Nobody credible has reported it."),
-            ("Answered", PAPER, "Your question, answered with sources.")]
-    for i, (v, c, d) in enumerate(rows):
-        y = 470 + i * 76
-        s += [hrule(760, y, 1064),
-              rect(760, y + 26, 22, 22, fill=c, radius=3),
-              text(806, y, 340, 74, v, size=22, weight="bold", color=c, anchor="middle"),
-              text(1150, y, 674, 74, d, size=17, color=MIST, anchor="middle")]
-    s += [hrule(760, 470 + 5 * 76, 1064),
-          text(760, 880, 1064, 40, "Up to 3 reasons, 2\u20133 sources. Checks the claim, not whether it's AI.", size=14, color=PAPER)]
-    notes = ("Paste a claim, an X link or an article link, add an image if you have one, and ask a question if you want. "
-             "You get one verdict, up to three reasons and two or three credible sources, with the receipts folded underneath. "
-             "It checks the claim, not whether the picture was made by AI.")
+    s += [image(96, 140, 546, 672, form),
+          rect(96, 140, 546, 672, line=RULE, lw=2),
+          text(96, 830, 560, 40, "The real input form.", size=13, color=MIST),
+          text(760, 140, 1064, 200, "Ask about anything you saw online.", size=48, weight="bold", spacing=1.05)]
+    b, _ = bullets(760, 400, 1064, ["Paste an image, an X post or an article link, plus a question.",
+                                    "Get one verdict, up to 3 reasons and 2\u20133 credible sources.",
+                                    "It checks the claim, not whether the image is AI."])
+    s += b
+    x = 760
+    for v, c in [("TRUE", LIME), ("FALSE", ROSE), ("MISLEADING", AMBER), ("UNVERIFIED", MIST), ("ANSWERED", PAPER)]:
+        bb, w = badge(x, 810, v, c, size=12, h=44)
+        s += bb
+        x += w + 14
+    notes = ("You paste an image, an X post or an article link, and you can ask a question. "
+             "You get one clear verdict with a few reasons and credible sources, and the receipts are folded underneath.")
     return s, notes
 
 
 def slide_pipeline():
-    s = chrome(4, "How it works")
+    s = chrome(5, "How it works")
     s += [text(96, 150, 1728, 120, "Four steps, each one on the record.", size=48, weight="bold")]
-    steps = [
-        ("Identify", ["Treg Google Lens"], "Gemini, vision assist only"),
-        ("Gather", ["Treg News", "Treg Web", "X profile and replies"], None),
-        ("Read", ["You.com Search", "You.com Contents", "You.com Answer", "You.com Research"], None),
-        ("Decide", ["Verdict and confidence"], None),
-    ]
-    y = 420
+    steps = [("Identify", "Treg Google Lens names the image."),
+             ("Gather", "Treg News, Web and X find the evidence."),
+             ("Read", "You.com reads the sources and cites them."),
+             ("Decide", "One verdict, with an honest confidence.")]
+    y = 440
     s.append(rect(96, y - 3, 1728, 6, fill=PAPER))
-    for i, (head, tools, foot) in enumerate(steps):
+    for i, (head, line) in enumerate(steps):
         x = 96 + i * 432
         s += [rect(x, y - 18, 36, 36, fill=LIME if i < 3 else PAPER, radius=18),
               text(x, y + 44, 400, 40, f"0{i + 1}", size=13, color=MIST, weight="bold", tracking=0.1),
-              text(x, y + 84, 400, 70, head, size=36, weight="bold")]
-        for j, t in enumerate(tools):
-            s.append(text(x, y + 176 + j * 46, 400, 44, t, size=18, color=PAPER))
-        if foot:
-            s.append(text(x, y + 176 + len(tools) * 46 + 10, 400, 40, foot, size=13, color=MIST))
+              text(x, y + 84, 400, 70, head, size=36, weight="bold"),
+              text(x, y + 176, 380, 120, line, size=19, color=PAPER, spacing=1.3)]
     s += [hrule(96, 880, 1728),
-          text(96, 896, 1100, 60, "Behind an XDC x402 paywall, ready at $0.02 a check.", size=17, weight="semibold", color=LIME, anchor="middle"),
-          text(1124, 896, 700, 60, "OpenCrawl was our agents' memory at build time.", size=13, color=MIST, align="right", anchor="middle")]
-    notes = ("Four steps. Treg's Google Lens figures out what the image is; Gemini only assists. "
-             "Treg News, Treg Web and the poster's X profile and replies gather evidence. "
-             "You.com Search, Contents, Answer and Research read the credible sources and write the verdict with a confidence. "
-             "The endpoint sits behind an XDC x402 paywall at two cents a check. OpenCrawl was our agents' memory while we built it.")
+          text(96, 896, 1728, 60, "The desk shows every step live, with the tool that ran it.", size=15, color=MIST, anchor="middle")]
+    notes = ("Treg's Google Lens works out what the image shows, and Treg News, Web and X gather evidence. "
+             "You.com reads the credible sources and writes a cited verdict with a confidence score.")
+    return s, notes
+
+
+def slide_sponsors():
+    s = chrome(6, "Sponsor tools")
+    s += [text(96, 150, 1728, 120, "The sponsor tools do the real work.", size=48, weight="bold")]
+    cols = [
+        ("You.com", [("Search", "Finds credible coverage of the claim."), ("Contents", "Reads the full source pages."),
+                     ("Answer", "Writes the cited verdict."), ("Research", "Deeper reading across many sources.")]),
+        ("Treg", [("Google Lens", "Identifies what's in the image."), ("News", "Finds news coverage."),
+                  ("Web", "Finds pages beyond the news."), ("X profile", "Checks who posted it."), ("X replies", "Reads what people replied.")]),
+        ("XDC", [("x402 endpoint", "Pay per check: $0.02 USDC."), ("Status", "Settlement isn't live yet.")]),
+    ]
+    for i, (name, rows) in enumerate(cols):
+        x = 96 + i * 592
+        s += [text(x, 320, 544, 60, name, size=28, weight="bold"),
+              rect(x, 392, 544, 4, fill=LIME)]
+        for j, (tool, job) in enumerate(rows):
+            y = 408 + j * 92
+            s += [text(x, y + 6, 544, 36, tool, size=18, weight="semibold"),
+                  text(x, y + 44, 544, 36, job, size=15, color=MIST),
+                  hrule(x, y + 90, 544, t=1)]
+    s += [text(96, 930, 1728, 50, "Also: Gemini only helps read images. OpenCrawl was used at build time.", size=15, color=MIST, anchor="middle")]
+    notes = ("You.com reads the sources and writes the verdict. Treg identifies the image and gathers news, web and X evidence. "
+             "XDC x402 is the pay-per-check endpoint at two cents; settlement isn't live yet.")
     return s, notes
 
 
 def slide_examples():
-    s = chrome(5, "From the desk")
-    s += [text(96, 140, 520, 400, "Three checks we ran today.", size=40, weight="bold", spacing=1.05),
-          text(96, 560, 460, 300, "Real posts from the demo, with the verdict the desk gave.\n\nCopacabana photo: CHr0m4tiko0, CC BY-SA 4.0, Wikimedia Commons. GTA VI art: Rockstar Games.", size=17, color=MIST, spacing=1.4)]
+    s = chrome(7, "From the desk")
+    s += [text(96, 140, 520, 400, "Three real checks.", size=48, weight="bold", spacing=1.05),
+          text(96, 560, 460, 300, "Real posts from the demo, with the verdict the desk gave.\n\nCopacabana photo: CHr0m4tiko0, CC BY-SA 4.0, Wikimedia Commons, a similar crowd, not the viral image. GTA VI art: Rockstar Games.", size=15, color=MIST, spacing=1.4)]
     rows = [
         (OUT / "img/gta6.jpg", "\u201cWhen does GTA 6 come out?\u201d", "Text question", "TRUE", LIME, "Release date confirmed by Rockstar's own sources."),
         (OUT / "img/reuters-x-post.png", "Reuters post on X", "x.com/Reuters", "TRUE", LIME, "Matches Reuters reporting. The poster's profile checks out."),
@@ -305,13 +357,9 @@ def slide_examples():
     x0, rw, rh = 600, 1224, 270
     for i, (img, claim, kind, v, c, why) in enumerate(rows):
         y = 140 + i * rh
-        s.append(hrule(x0, y, rw))
-        if img:
-            s.append(image(x0, y + 17, 400, 236, cover(img, 400, 236, f"s5-{i}", focus=(0.5, 0.0 if i == 1 else 0.45))))
-        else:
-            s += [rect(x0, y + 24, 330, 220, fill="#151A21"),
-                  text(x0 + 24, y + 24, 282, 220, "GTA 6?", size=40, weight="bold", color=PAPER, anchor="middle")]
-        s += [text(x0 + 436, y + 30, 760, 30, kind.upper(), size=11, color=MIST, weight="bold", tracking=0.16),
+        s += [hrule(x0, y, rw),
+              image(x0, y + 17, 400, 236, cover(img, 400, 236, f"s7-{i}", focus=(0.5, 0.0 if i == 1 else 0.45))),
+              text(x0 + 436, y + 30, 760, 30, kind.upper(), size=11, color=MIST, weight="bold", tracking=0.16),
               text(x0 + 436, y + 66, 560, 90, claim, size=20, weight="semibold", spacing=1.2),
               text(x0 + 436, y + 176, 760, 60, why, size=15, color=MIST, spacing=1.35)]
         b, bw = badge(0, y + 30, v, c, size=15, h=48)
@@ -319,29 +367,39 @@ def slide_examples():
             it["x"] = x0 + rw - bw
         s += b
     s.append(hrule(x0, 140 + 3 * rh, rw))
-    notes = ("Three real checks from the demo. A plain question, when does GTA 6 come out: True, from Rockstar's own sources. "
-             "A Reuters post on X: True, and it checks the poster's profile too. "
-             "And the crowd photo shared as a Trump rally in New Jersey: Misleading, it's Copacabana beach.")
+    notes = ("Three real checks from the demo. The GTA 6 question comes back True from Rockstar's own sources, "
+             "the Reuters post is True with the poster's profile checked, and the rally photo is Misleading because it's Copacabana.")
     return s, notes
 
 
-def slide_sponsors():
-    s = chrome(6, "Sponsor tools")
-    s += [text(96, 150, 1728, 120, "You watch every tool do its job.", size=50, weight="bold", spacing=1.04),
-          text(96, 290, 1728, 80, "The live check panel: every step names its tool as it runs, with time and results.", size=20, color=MIST)]
-    panel = OUT / "img/app-live-check.png"
-    s += [image(96, 390, 1728, 600, cover(panel, 1728, 600, "s6-panel", focus=(0, 0))),
-          rect(96, 390, 1728, 600, line=RULE, lw=2)]
-    notes = ("While a check runs, each step lights up with the sponsor tool's name, its latency, and how many results it found. "
-             "Nothing's hidden: you see You.com, Treg and XDC doing the work.")
+def slide_built():
+    s = chrome(8, "How we built it")
+    s += [text(96, 150, 880, 120, "How we built it.", size=50, weight="bold")]
+    b, _ = bullets(96, 330, 780, ["FastAPI backend, React and Vite frontend.",
+                                  "Sponsor calls run in parallel, each with its own deadline.",
+                                  "Built with Cursor cloud agents running Claude and GPT."])
+    s += b
+    x0, w0 = 1000, 824
+    stack = [("You.com", "Reads the sources, writes the verdict"), ("Treg", "Identifies the image, gathers evidence"),
+             ("XDC x402", "$0.02 USDC per check, settlement not live yet"), ("Gemini", "Helps read images, nothing more"),
+             ("OpenCrawl", "Agent memory while we built it")]
+    s.append(text(x0, 150, w0, 30, "THE STACK", size=12, color=MIST, weight="bold", tracking=0.16))
+    for i, (k, v) in enumerate(stack):
+        y = 200 + i * 132
+        s += [hrule(x0, y, w0),
+              text(x0, y + 24, w0, 40, k, size=22, weight="bold"),
+              text(x0, y + 72, w0, 40, v, size=16, color=MIST)]
+    s.append(hrule(x0, 200 + 5 * 132, w0))
+    notes = ("It's a FastAPI backend with a React and Vite frontend, and the sponsor calls run in parallel with deadlines so one slow tool can't stall a check. "
+             "I built it with Cursor cloud agents running Claude and GPT, and OpenCrawl kept their memory between sessions.")
     return s, notes
 
 
-def slide_why():
-    s = chrome(7, "Who it's for")
-    s += [text(96, 150, 860, 260, "$0.02", size=120, weight="bold", color=LIME, spacing=1.0),
-          text(96, 440, 800, 120, "per check. Agents and apps pay over XDC x402, no account needed.", size=22, weight="semibold", spacing=1.3),
-          text(96, 640, 900, 60, "POST /api/x402/check  \u2192  402  \u2192  pay USDC on XDC  \u2192  receipt", size=14, color=MIST)]
+def slide_who():
+    s = chrome(9, "Who it's for")
+    s += [text(96, 150, 820, 120, "Who it's for.", size=54, weight="bold"),
+          text(96, 420, 860, 220, "$0.02", size=110, weight="bold", color=LIME, spacing=1.0),
+          text(96, 660, 820, 120, "per check for AI agents and apps, paid over XDC x402.", size=22, weight="semibold", spacing=1.3)]
     who = [("People about to repost", "Check it before you share it."),
            ("Journalists on deadline", "Sources and a timeline in one place."),
            ("Moderators making a call", "A verdict with receipts behind it.")]
@@ -351,23 +409,50 @@ def slide_why():
               text(1060, y + 30, 764, 60, a, size=30, weight="bold"),
               text(1060, y + 124, 764, 50, b, size=18, color=MIST)]
     s.append(hrule(1060, 150 + 3 * 220, 764))
-    notes = ("It's for people about to hit repost, journalists on deadline, and moderators who need to make a call they can defend. "
-             "And for agents and apps it's a pay-per-call API: x402 on XDC, two cents a check. "
-             "In this build the paywall speaks the 402 challenge; real settlement is the next step.")
+    notes = ("It's for people about to repost, journalists on deadline and moderators who need a call they can defend. "
+             "AI agents and apps can call the same check and pay two cents over XDC x402.")
+    return s, notes
+
+
+def slide_lessons():
+    s = chrome(10, "Challenges, lessons, fun")
+    s += [text(96, 150, 1728, 120, "What was hard, what I learned.", size=48, weight="bold")]
+    cols = [
+        ("Challenges", ["A speed upgrade broke every check on Python 3.15. A plain thread pool fixed it.",
+                        "A 20s limit cut checks short. It's now 60s.",
+                        "Keeping sponsors doing the real work, and the confidence honest, not a fake 99%."]),
+        ("Learned", ["The x402 payment standard on XDC.",
+                     "How Treg wraps Google Lens, News and X behind one API.",
+                     "Showing why an answer was chosen matters as much as the answer."]),
+        ("Fun", ["[Michael: say what was fun]"]),
+    ]
+    for i, (head, items) in enumerate(cols):
+        x = 96 + i * 592
+        s += [text(x, 320, 544, 50, head, size=26, weight="bold"),
+              rect(x, 382, 544, 4, fill=LIME)]
+        b, _ = bullets(x, 420, 544, items, size=17, gap=30)
+        s += b
+    notes = ("The hardest bug was a speed upgrade that broke every check on Python 3.15; a plain thread pool fixed it. "
+             "I learned the x402 payment standard and that showing why an answer was chosen matters as much as the answer. "
+             "[Michael: tell what was fun in your own words.]")
     return s, notes
 
 
 def slide_close():
-    s = [rect(0, 0, W, H, fill=BG_FILL)]
-    s += [image(96, 96, 64, 64, LOGO),
-          text(180, 96, 600, 64, "Provenance", size=20, weight="semibold", anchor="middle"),
-          text(96, 300, 1500, 300, "Check it before\nyou share it.", size=88, weight="bold", spacing=1.0),
-          hrule(96, 820, 1728),
-          text(96, 846, 900, 50, "github.com/michaelnjoku347/Provenance", size=22, color=LIME, weight="semibold"),
-          text(96, 904, 900, 40, "Built by Michael Njoku", size=16, color=PAPER),
-          text(1024, 846, 800, 50, "Every answer comes with proof.", size=22, weight="semibold", align="right"),
-          text(1024, 904, 800, 40, "You.com  ·  Treg  ·  XDC x402  ·  OpenCrawl", size=14, color=MIST, align="right")]
-    notes = "That's Provenance. Every answer comes with proof. The code is on GitHub at michaelnjoku347/Provenance. I'm Michael Njoku, thanks."
+    s = chrome(11, "What's next")
+    s += [image(96, 140, 64, 64, LOGO),
+          text(96, 250, 1728, 260, "Check it before\nyou share it.", size=72, weight="bold", spacing=1.0),
+          hrule(96, 620, 1728),
+          text(96, 650, 800, 30, "WHAT'S NEXT", size=12, color=MIST, weight="bold", tracking=0.16)]
+    b, _ = bullets(96, 700, 760, ["Real on-chain x402 settlement on XDC.",
+                                  "A browser extension to check posts in place.", "More sources."], size=20, gap=20)
+    s += b
+    s += [text(1024, 650, 800, 30, "THE CODE", size=12, color=MIST, weight="bold", tracking=0.16, align="right"),
+          text(1024, 700, 800, 50, "github.com/michaelnjoku347/Provenance", size=19, color=LIME, weight="semibold", align="right"),
+          text(1024, 760, 800, 40, "Built by Michael Njoku", size=18, align="right"),
+          text(1024, 810, 800, 40, "Every answer comes with proof.", size=15, color=MIST, align="right")]
+    notes = ("Next is real on-chain settlement for x402, a browser extension that checks posts where you see them, and more sources. "
+             "The code is on GitHub. I'm Michael Njoku, thank you.")
     return s, notes
 
 
@@ -471,8 +556,10 @@ def main():
     PNG_DIR.mkdir(parents=True, exist_ok=True)
     prs = Presentation()
     prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)
-    builders = [slide_title, slide_problem, slide_what, slide_pipeline, slide_examples, slide_sponsors, slide_why, slide_close]
-    names = ["01-title", "02-problem", "03-what-it-does", "04-how-it-works", "05-live-examples", "06-sponsor-tools", "07-why-it-matters", "08-close"]
+    builders = [slide_title, slide_problem, slide_inspiration, slide_what, slide_pipeline, slide_sponsors,
+                slide_examples, slide_built, slide_who, slide_lessons, slide_close]
+    names = ["01-title", "02-problem", "03-inspiration", "04-what-it-does", "05-how-it-works", "06-sponsor-tools",
+             "07-real-checks", "08-how-we-built-it", "09-who-its-for", "10-challenges-lessons", "11-whats-next-close"]
     for build, name in zip(builders, names):
         items, notes = build()
         add_pptx(prs, items, notes)
