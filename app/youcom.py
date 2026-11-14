@@ -116,6 +116,13 @@ def _parse_pages(body: dict) -> list[dict]:
     return pages
 
 
+def read_page(url: str) -> dict:
+    """Read one URL the user pasted. Skips cleanly when You.com is not configured."""
+    if not config.key("YDC_API_KEY"):
+        return {"status": "skipped", "detail": "YDC_API_KEY is not set.", "pages": []}
+    return _contents([url])
+
+
 def _contents(urls: list[str]) -> dict:
     if not urls:
         return {"status": "skipped", "detail": "No result URLs to read.", "pages": []}
@@ -129,9 +136,9 @@ def _contents(urls: list[str]) -> dict:
 
 def _answer(query: str) -> dict:
     question = (
-        "Is this claim being reported right now by credible news outlets? "
-        "Say whether the depicted event looks real, AI-generated, or like an old image "
-        f"used out of context. Cite sources. Claim: {query}"
+        "Is this claim true, false, or misleading based on credible reporting? "
+        "Note if the timing or the context does not match. Cite sources. "
+        f"Claim: {query}"
     )[:1500]
     if config.flag("YDC_USE_RESEARCH"):
         status, body = httputil.post_json(

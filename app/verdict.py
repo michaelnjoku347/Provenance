@@ -1,4 +1,4 @@
-"""Turn the clues into one verdict. The detector can move the score only a little."""
+"""Turn sources and dates into a verdict about the claim. An AI-image signal cannot decide it."""
 
 from __future__ import annotations
 
@@ -85,11 +85,16 @@ RECENCY = (
     "right now",
 )
 
+TRUE = "True"
+FALSE = "False"
+MISLEADING = "Misleading or Out of Context"
+UNVERIFIED = "Unverified"
+
 SUMMARIES = {
-    "Likely Real": "Credible reporting lines up with the claim, and the file does not look synthetic.",
-    "Likely AI or Fake": "The file or the coverage points to a generated or false image.",
-    "Out of Context": "The picture may be real, but it does not match the time or the story in the claim.",
-    "Unverified": "The clues do not agree enough to call this real, fake, or miscaptioned.",
+    TRUE: "Credible sources support this claim, and nothing strong says the date or the story is wrong.",
+    FALSE: "Reporting contradicts this claim.",
+    MISLEADING: "The claim does not match the date or the context of the evidence.",
+    UNVERIFIED: "There is not enough from credible sources to call this claim true, false, or misleading.",
 }
 
 
@@ -159,6 +164,7 @@ def decide(
     reverse: dict,
     detector: dict,
     now: datetime | None = None,
+    posted_at: str = "",
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     text = claim.get("text") or ""
@@ -173,7 +179,7 @@ def decide(
             real += points
         elif bucket == "fake":
             fake += points
-        else:
+        elif bucket == "out_of_context":
             ooc += points
         contributions.append(
             {
@@ -185,24 +191,21 @@ def decide(
             }
         )
 
-    if c2pa.get("generative"):
-        _add("fake", 45, "Generative C2PA marker", "The file has a C2PA marker that names a generative tool.")
-    elif credentials.get("software_generative"):
+    if c2pa.get("generative") or credentials.get("software_generative"):
+        tool = exif.get("software") or "a generative tool"
         _add(
-            "fake",
-            38,
-            "Generative software tag",
-            f"EXIF Software is {exif.get('software') or 'a generative tool'}.",
+            "weak",
+            0,
+            "Weak clue: generative file marker",
+            f"The file names {tool}. That is a weak signal about the picture, not a verdict on the claim.",
         )
     elif c2pa.get("present") and c2pa.get("camera"):
-        _add("real", 22, "Camera content credentials", "A C2PA manifest names a camera, not a generative tool.")
-
-    if exif.get("make") and exif.get("model"):
-        _add("real", 8, "Camera make and model", f"{exif.get('make')} {exif.get('model')}.".replace("  ", " "))
-    elif exif.get("make"):
-        _add("real", 5, "Camera make", f"EXIF make is {exif.get('make')}.")
-    if exif.get("datetime"):
-        _add("real", 4, "File timestamp", f"EXIF records {exif.get('datetime')}.")
+        _add(
+            "weak",
+            0,
+            "Weak clue: camera content credentials",
+            "A C2PA manifest names a camera. That does not by itself prove the claim.",
+        )
 
     captured = _parse_when(exif.get("datetime") or "")
     date_conflict = False
@@ -224,6 +227,27 @@ def decide(
                 16,
                 "Capture date looks stale",
                 f"The file is dated {captured.strftime('%Y-%m-%d')}, which is older than the claim's timeframe.",
+            )
+            date_conflict = True
+
+    posted = _parse_when(posted_at or "")
+    if posted and _recent_claim(text):
+        post_age = (now.date() - posted.date()).days
+        if post_age > 30:
+            _add(
+                "out_of_context",
+                40,
+                "Post date contradicts the claim",
+                f"The post is dated {posted.strftime('%Y-%m-%d')}, but the claim describes something happening now.",
+            )
+            date_conflict = True
+            strong_date_conflict = True
+        elif post_age > 2:
+            _add(
+                "out_of_context",
+                16,
+                "Post date looks stale",
+                f"The post is dated {posted.strftime('%Y-%m-%d')}, which is older than the claim's timeframe.",
             )
             date_conflict = True
 
@@ -302,9 +326,12 @@ def decide(
 
     detector_score = float(detector.get("score") or 0)
     if detector_score >= 0.75:
-        _add("fake", 12, "AI-image prior is high", f"Local prior score {detector_score:.2f}. Counted as one clue, not a lab detector.")
-    elif detector_score <= 0.25 and exif.get("make"):
-        _add("real", 4, "AI-image prior is low", f"Local prior score {detector_score:.2f}, and the file has camera metadata.")
+        _add(
+            "weak",
+            0,
+            "Weak clue: AI-image prior",
+            f"Local prior score {detector_score:.2f}. Not a lab result, and not a verdict on the claim.",
+        )
 
     for match in reverse.get("matches") or []:
         seen = _parse_when(match.get("date") or "")
@@ -328,7 +355,7 @@ def decide(
 
     scores = {"real": real, "fake": fake, "out_of_context": ooc}
     ranked = sorted(
-        (("Likely Real", real), ("Likely AI or Fake", fake), ("Out of Context", ooc)),
+        ((TRUE, real), (FALSE, fake), (MISLEADING, ooc)),
         key=lambda item: item[1],
         reverse=True,
     )
@@ -336,9 +363,9 @@ def decide(
     second_score = ranked[1][1]
     contested = top_score >= 25 and (top_score - second_score) < 8
     if strong_date_conflict and fake < 38:
-        verdict = "Out of Context"
+        verdict = MISLEADING
     elif top_score < 25 or contested:
-        verdict = "Unverified"
+        verdict = UNVERIFIED
     else:
         verdict = top_label
 
@@ -348,9 +375,9 @@ def decide(
     else:
         gap = max(0, top_score - second_score)
         confidence = 44 + min(28, top_score // 2) + min(10, gap // 4)
-        if source_count >= 2 and verdict == "Likely Real":
+        if source_count >= 2 and verdict == TRUE:
             confidence += 6
-        if source_count == 0 and verdict == "Likely Real":
+        if source_count == 0 and verdict == TRUE:
             confidence -= 8
         confidence = int(max(38, min(90, confidence)))
 
@@ -402,18 +429,18 @@ def _build_clues(
     if c2pa.get("generative"):
         clues.append(
             _clue(
-                "Content credentials",
-                "The file has a C2PA marker that names a generative tool.",
-                "strong",
+                "Weak clue: content credentials",
+                "The file has a C2PA marker that names a generative tool. This does not decide the claim.",
+                "weak",
                 source="c2pa",
             )
         )
     elif credentials.get("software_generative"):
         clues.append(
             _clue(
-                "File software tag",
-                f"EXIF Software is {exif.get('software') or 'a generative tool'}.",
-                "strong",
+                "Weak clue: file software tag",
+                f"EXIF Software is {exif.get('software') or 'a generative tool'}. This does not decide the claim.",
+                "weak",
                 source="exif",
             )
         )
@@ -535,8 +562,8 @@ def _build_clues(
     if len(clues) < 4:
         clues.append(
             _clue(
-                "AI-image prior",
-                f"Score {float(detector.get('score') or 0):.2f}. {detector.get('note') or ''}",
+                "Weak clue: AI-image prior",
+                f"Score {float(detector.get('score') or 0):.2f}. {detector.get('note') or ''} It does not decide the claim.",
                 "weak",
                 source="detector",
             )

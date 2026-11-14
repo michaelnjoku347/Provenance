@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Iterator
 
-from app import config, credentials, detector, explain, reverse_image, samples, store, verdict, vision, youcom
+from app import config, credentials, detector, explain, links, reverse_image, samples, store, verdict, vision, youcom
 
 
 def _stage_error(name: str) -> dict:
@@ -32,7 +32,7 @@ def _cache_key(image: bytes, claim_text: str, image_url: str) -> str:
     digest.update(image_url.encode())
     digest.update(b"\0")
     digest.update(flags.encode())
-    digest.update(b"\0explain-v1")
+    digest.update(b"\0claim-v2")
     return digest.hexdigest()
 
 
@@ -58,7 +58,7 @@ def _credential_flags(creds: dict) -> list[dict]:
     if exif.get("datetime"):
         flags.append({"label": f"Captured {exif['datetime']}", "tone": "neutral"})
     if creds.get("software_generative") or c2pa.get("generative"):
-        flags.append({"label": exif.get("software") or "Generative marker", "tone": "fake"})
+        flags.append({"label": f"Weak: {exif.get('software') or 'Generative marker'}", "tone": "neutral"})
     elif c2pa.get("present"):
         flags.append({"label": "C2PA present", "tone": "real"})
     else:
@@ -73,8 +73,24 @@ def _search_flags(search: dict) -> list[dict]:
     return flags
 
 
-def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse) -> dict:
-    decision = verdict.decide(claim, creds, web, reverse, prior)
+def _link_card(link: dict) -> dict:
+    return {
+        "kind": link.get("kind") or "",
+        "status": link.get("status") or "",
+        "url": link.get("url") or "",
+        "author": link.get("author") or "",
+        "author_url": link.get("author_url") or "",
+        "posted_at": link.get("posted_at") or "",
+        "text": (link.get("text") or "")[:1000],
+        "title": link.get("title") or "",
+        "image_url": link.get("image_url") or "",
+        "detail": link.get("detail") or "",
+    }
+
+
+def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link=None) -> dict:
+    link = link or {}
+    decision = verdict.decide(claim, creds, web, reverse, prior, posted_at=link.get("posted_at") or "")
     checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = {
         "verdict": decision["verdict"],
@@ -126,6 +142,11 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
     }
     if demo_id:
         result["preview_url"] = f"/api/demos/{demo_id}/image"
+    elif not image and link.get("image_url"):
+        result["preview_url"] = link["image_url"]
+    if link.get("kind"):
+        result["link"] = _link_card(link)
+        result["stages"]["link"] = {"status": link.get("status") or "error", "detail": link.get("detail") or ""}
     explain.attach(result, image_url)
     statuses = [stage["status"] for stage in result["stages"].values()]
     if "error" not in statuses:
@@ -153,7 +174,36 @@ def iter_run(
         yield {"event": "result", "data": cached}
         return
 
-    yield _stage("credentials", "running", "Reading the file", "Checking EXIF, software tags, and C2PA.")
+    link: dict = {}
+    if image_url.startswith("http") and not links.is_direct_image(image_url):
+        yield _stage("link", "running", "Reading the link", "X posts and article pages can supply the claim.")
+        try:
+            link = links.resolve(image_url)
+        except Exception:
+            link = {
+                "kind": "status" if links.is_status_url(image_url) else "article",
+                "status": "error",
+                "url": image_url,
+                "detail": "The link could not be read. Paste the claim instead.",
+            }
+        if not claim_text and link.get("claim"):
+            claim_text = link["claim"]
+        flags = []
+        if link.get("author"):
+            flags.append({"label": link["author"], "tone": "neutral"})
+        if link.get("posted_at"):
+            flags.append({"label": f"Posted {link['posted_at'][:10]}", "tone": "neutral"})
+        elif link.get("title"):
+            flags.append({"label": link["title"][:80], "tone": "neutral"})
+        yield _stage(
+            "link",
+            "ok" if link.get("status") == "ok" else "error",
+            "Read the link",
+            link.get("detail") or "",
+            flags,
+        )
+
+    yield _stage("credentials", "running", "Reading the file", "Checking EXIF, software tags, and C2PA." if image else "No file attached.")
     creds = credentials.inspect(image)
     yield _stage("credentials", creds["status"], "Read EXIF and C2PA", creds["detail"], _credential_flags(creds))
 
@@ -164,12 +214,14 @@ def iter_run(
         prior["status"],
         "Weighed AI-image prior",
         prior["note"],
-        [{"label": f"Prior {prior['score']:.2f}", "tone": "fake" if float(prior.get("score") or 0) >= 0.75 else "neutral"}],
+        [{"label": f"Weak prior {prior['score']:.2f}", "tone": "neutral"}],
     )
 
     yield _stage("vision", "running", "Reading the claim", "Using the caption, or a vision model if one is configured.")
     claim, vision_stage = vision.extract(image, media_type, claim_text)
-    yield _stage("vision", vision_stage["status"], "Read the claim", vision_stage.get("detail") or claim.get("text") or "", [{"label": (claim.get("text") or "No caption")[:80], "tone": "neutral"}])
+    if link.get("search_query") and vision_stage.get("status") != "ok":
+        claim["search_query"] = str(link["search_query"])[:300]
+    yield _stage("vision", vision_stage["status"], "Read the claim", vision_stage.get("detail") or claim.get("text") or "", [{"label": (claim.get("text") or "No claim")[:80], "tone": "neutral"}])
 
     query = (claim.get("search_query") or claim.get("text") or "").strip()
     if query.lower().startswith("no caption"):
@@ -182,7 +234,12 @@ def iter_run(
     reverse = {"status": "error", "detail": "Reverse image failed.", "matches": [], "tool": ""}
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
-            rev_f = pool.submit(reverse_image.lookup, image_url)
+            reverse_url = image_url
+            if link.get("kind") == "status":
+                reverse_url = link.get("image_url") or ""
+            elif link.get("kind") == "article":
+                reverse_url = ""
+            rev_f = pool.submit(reverse_image.lookup, reverse_url)
             for name, data in youcom.iter_investigate(query):
                 web[name] = data
                 if name == "search":
@@ -212,16 +269,17 @@ def iter_run(
     rev_flags = [{"label": m.get("title") or m.get("url") or "Match", "tone": "neutral"} for m in matches[:3]]
     yield _stage("reverse_image", reverse["status"], "Reverse image", reverse.get("detail") or "", rev_flags)
 
-    yield _stage("verdict", "running", "Weighing the evidence", "Scoring each clue for, against, or as out of context.")
+    yield _stage("verdict", "running", "Judging the claim", "Comparing sources and dates with what the claim says.")
     result = _assemble(
-        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse
+        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link
     )
+    tone = "real" if result["verdict"] == "True" else "fake" if result["verdict"] == "False" else "verdict"
     yield _stage(
         "verdict",
         "ok",
-        "Weighed the evidence",
+        "Judged the claim",
         result["summary"],
-        [{"label": result["verdict"], "tone": "verdict"}],
+        [{"label": result["verdict"], "tone": tone}],
     )
     yield {"event": "result", "data": result}
 
@@ -264,13 +322,14 @@ def _prepare_request(payload: dict) -> dict:
         filename = filename or f"{demo_id}.jpg"
         if not str(claim).strip():
             claim = sample["claim"]
-    if not image:
-        raise ValueError("Send an image as base64, a multipart file, or a demo_id.")
+    image_url = str(payload.get("image_url") or "").strip()
+    if not image and not str(claim).strip() and not image_url:
+        raise ValueError("Send a claim, a link, an image, a file, or a demo_id.")
     return {
         "image": image,
         "media_type": media_type,
         "claim_text": claim,
-        "image_url": payload.get("image_url") or "",
+        "image_url": image_url,
         "demo_id": demo_id,
         "filename": filename,
     }
