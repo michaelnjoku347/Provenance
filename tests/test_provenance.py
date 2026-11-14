@@ -645,7 +645,15 @@ def test_image_question_uses_treg_names_then_youcom(client, monkeypatch):
             }
         if url.endswith("/v1/contents"):
             return 200, {"results": []}
+        if url.endswith("/v1/research"):
+            return 200, {
+                "output": {
+                    "content": '{"names":["Jensen Huang","Lori Huang"],"role":"NVIDIA CEO","relation":"wife","what":""}',
+                    "sources": [],
+                }
+            }
         if url.endswith("/v1/answer"):
+            assert len(payload.get("query") or "") <= 400
             return 200, {"answer": "", "citations": []}
         raise AssertionError(url)
 
@@ -777,6 +785,60 @@ def test_frequency_names_skip_publication_fragments():
     assert "Lori Huang" in names
     assert "Oregon Live He" not in names
     assert "New Oregon State" not in names
+    headlines = [
+        {"title": "Spouse Helps Launch Nvidia Foundation at Oregon State University", "snippet": "Lori Mills Huang attended."},
+        {"title": "nvidia ceo jensen huang and his wife lori huang", "snippet": ""},
+        {"title": "Jensen Huang says the new machine is ready", "snippet": "Jensen Huang spoke."},
+        {"title": "Who is Lori Huang? Jensen Huang's wife of 40 years", "snippet": ""},
+    ]
+    ranked = frequency_names(headlines)
+    assert ranked[0] == "Jensen Huang"
+    assert "Spouse Helps Launch" not in ranked
+    assert "Helps Launch" not in ranked
+    assert all("Foundation" not in name and "University" not in name and "Spouse" not in name for name in ranked)
+
+
+def test_answer_queries_stay_within_400_characters(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+    seen = {"answer": [], "research": 0}
+
+    def fake_get(url, headers=None, timeout=20.0):
+        if "catalog/search" in url:
+            return 200, {"tools": []}
+        return 200, {"organic": [{"title": "Jensen Huang and his wife Lori Huang", "link": "https://www.reuters.com/huang", "snippet": "Jensen Huang."}]}
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [{"url": "https://www.reuters.com/huang", "title": "Jensen Huang", "snippets": ["Jensen Huang is NVIDIA's CEO."]}]}}
+        if url.endswith("/v1/contents"):
+            return 200, []
+        if url.endswith("/v1/answer"):
+            query = payload.get("query") or ""
+            assert len(query) <= 400
+            seen["answer"].append(query)
+            return 200, {"answer": "Unverified.", "citations": []}
+        if url.endswith("/v1/research"):
+            seen["research"] += 1
+            assert len(payload.get("input") or "") > 400
+            return 200, {"output": {"content": '{"people":["Jensen Huang","Lori Huang"]}', "sources": []}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    monkeypatch.setattr("app.httputil.get_bytes", lambda url, timeout=20.0: (404, b"", ""))
+    long_claim = "A crowd gathered outside city hall this morning. " + ("detail " * 120)
+    statement = client.post("/api/check", json={"claim": long_claim}).json()
+    assert statement["verdict"]
+    assert seen["answer"]
+    assert all(len(query) <= 400 for query in seen["answer"])
+    question = client.post(
+        "/api/check",
+        json={"claim": "Are Jensen Huang and Lori Huang divorced?", "image_url": "https://cdn.example.com/huang.jpg"},
+    ).json()
+    assert question["sponsors"]["youcom_answer"]["label"] == "You.com Research"
+    assert seen["research"] >= 1
+    assert all(len(query) <= 400 for query in seen["answer"])
 
 
 def test_huang_live_fixture_names_the_couple_and_the_speculation(client, monkeypatch):
@@ -858,20 +920,24 @@ def test_huang_live_fixture_names_the_couple_and_the_speculation(client, monkeyp
                     "metadata": {"site_name": "Forbes"},
                 }
             ]
-        if url.endswith("/v1/answer"):
-            prompt = payload.get("query") or ""
+        if url.endswith("/v1/research"):
+            prompt = payload.get("input") or ""
             seen["prompts"].append(prompt)
-            if "Return one JSON object" in prompt:
+            if "Return one JSON object" in prompt or "people" in prompt:
                 return 200, {
-                    "answer": '{"names":["Jensen Huang","Lori Huang"],"role":"NVIDIA CEO","relation":"wife","what":""}',
-                    "citations": [],
+                    "output": {
+                        "content": '{"people":["Jensen Huang","Lori Huang"],"role":"NVIDIA CEO","relation":"wife","what":""}',
+                        "sources": [{"url": "https://www.forbes.com/sites/example", "title": "Forbes", "snippets": ["speculation"]}],
+                    }
                 }
             if "reverse-image page titles" in prompt:
-                return 200, {"answer": "NVIDIA CEO Jensen Huang standing with his wife Lori Huang.", "citations": []}
-            return 200, {
-                "answer": "Jensen Huang and Lori Huang are not reported divorced. Forbes reports speculation only.",
-                "citations": [],
-            }
+                return 200, {"output": {"content": "NVIDIA CEO Jensen Huang standing with his wife Lori Huang.", "sources": []}}
+            return 200, {"output": {"content": "They are not reported divorced.", "sources": []}}
+        if url.endswith("/v1/answer"):
+            prompt = payload.get("query") or ""
+            assert len(prompt) <= 400
+            seen["prompts"].append(prompt)
+            return 200, {"answer": "", "citations": []}
         if "generativelanguage" in url:
             raise AssertionError("gemini should not run without a key")
         raise AssertionError(url)
@@ -908,7 +974,8 @@ def test_huang_live_fixture_names_the_couple_and_the_speculation(client, monkeyp
     assert "\u2014" in forbes["title"]
     assert "\u00e2" not in forbes["title"]
     assert seen["catalog"] >= 2
-    assert any("JSON" in prompt for prompt in seen["prompts"])
+    assert any("JSON" in prompt or "people" in prompt for prompt in seen["prompts"])
+    assert body["sponsors"]["youcom_answer"]["label"] == "You.com Research"
     assert body["stages"]["vision"]["status"] == "ok"
     assert "continued" in body["stages"]["vision"]["detail"].lower()
 

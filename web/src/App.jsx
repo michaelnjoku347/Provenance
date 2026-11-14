@@ -1142,7 +1142,8 @@ function sponsorStat(stage) {
 }
 
 function SponsorChip({ stage }) {
-  const name = SPONSOR_CHIPS[stage.id] || SPONSOR_CHIPS[stage.sponsor] || SPONSOR_CHIPS[stage.id]
+  const research = (stage.id === 'youcom_answer' || stage.sponsor === 'youcom_answer') && /research/i.test(`${stage.label || ''} ${stage.detail || ''}`)
+  const name = research ? 'You.com Research' : SPONSOR_CHIPS[stage.id] || SPONSOR_CHIPS[stage.sponsor] || SPONSOR_CHIPS[stage.id]
   if (!name) return null
   const lit = stage.status === 'running' || stage.status === 'ok'
   const stat = sponsorStat(stage)

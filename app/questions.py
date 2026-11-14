@@ -9,7 +9,7 @@ from app import config
 from app.textutil import repair_text
 from app.verdict import FALSE, UNVERIFIED, host_of, is_credible, is_rumor, tier
 
-_NAME = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b")
+_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
 _BAD = {
     "new",
     "state",
@@ -75,6 +75,48 @@ _BAD = {
     "yahoo",
     "reuters",
     "downtown",
+    "spouse",
+    "helps",
+    "help",
+    "launch",
+    "launches",
+    "launched",
+    "launching",
+    "foundation",
+    "college",
+    "school",
+    "institute",
+    "trustee",
+    "trust",
+    "trusts",
+    "born",
+    "married",
+    "meets",
+    "met",
+    "donates",
+    "donated",
+    "says",
+    "said",
+    "walk",
+    "walks",
+    "files",
+    "filed",
+    "reports",
+    "reported",
+    "could",
+    "would",
+    "side",
+    "years",
+    "head",
+    "nvidia",
+    "spoke",
+    "beside",
+    "standing",
+    "during",
+    "will",
+    "like",
+    "machine",
+    "time",
 }
 _DIVORCE = ("divorce", "divorced", "divorcing", "separation", "separated", "split up")
 _SPECULATION = (
@@ -142,27 +184,114 @@ def split_questions(text: str) -> list[dict]:
     return parts
 
 
+def _token(word: str) -> str:
+    bare = word.strip(".'’")
+    if len(bare) < 2 or not bare.isalpha():
+        return ""
+    if bare.isupper():
+        return ""
+    if bare.lower() in _BAD:
+        return ""
+    if bare[:1].islower():
+        return bare[:1].upper() + bare[1:]
+    return bare
+
+
+def _runs(text: str) -> list[str]:
+    """Person-name bigrams and trigrams. A verb, a role word, or punctuation breaks the run."""
+    found: list[str] = []
+    run: list[str] = []
+    previous = 0
+    source = text or ""
+
+    def flush() -> None:
+        if len(run) in {2, 3}:
+            found.append(" ".join(run))
+
+    for match in _WORD.finditer(source):
+        gap = source[previous:match.start()]
+        token = _token(match.group())
+        if run and re.search(r"[.!?|;:]", gap):
+            flush()
+            run = []
+        if not token:
+            flush()
+            run = []
+        else:
+            run.append(token)
+            if len(run) == 3:
+                flush()
+                run = []
+        previous = match.end()
+    flush()
+    return found
+
+
 def _ok(name: str) -> bool:
     words = [word for word in (name or "").split() if word]
     if len(words) < 2 or len(words) > 3:
         return False
-    return all(word.lower().strip(".'’") not in _BAD for word in words)
+    return all(_token(word) == word or (_token(word) and word[:1].isupper()) for word in words) and all(
+        word.lower().strip(".'’") not in _BAD for word in words
+    )
 
 
-def frequency_names(matches: list[dict], extra: str = "") -> list[str]:
-    """Rank person names by how many titles mention them. Fragments never qualify."""
+def _contained(shorter: str, longer: str) -> bool:
+    small = shorter.split()
+    large = longer.split()
+    if len(small) >= len(large):
+        return False
+    index = 0
+    for word in large:
+        if index < len(small) and word.lower() == small[index].lower():
+            index += 1
+    return index == len(small)
+
+
+def _drop_contained(names: list[str], counts: dict[str, int] | None = None) -> list[str]:
+    """Drop a fragment that a longer name also covers, and a one-off that swallows a common name."""
+    counts = counts or {}
+    kept = []
+    for name in names:
+        longer = [other for other in names if other != name and _contained(name, other)]
+        if longer and all(counts.get(other, 0) >= counts.get(name, 0) for other in longer):
+            continue
+        kept.append(name)
+    final = []
+    for name in kept:
+        shorter = [
+            other
+            for other in kept
+            if other != name and _contained(other, name) and counts.get(other, 0) > counts.get(name, 0)
+        ]
+        if shorter:
+            continue
+        final.append(name)
+    return final
+
+
+def _name_counts(matches: list[dict], extra: str = "") -> dict[str, int]:
     counts: dict[str, int] = {}
     texts = [f"{item.get('title') or ''} {item.get('snippet') or ''}" for item in matches or []]
     if extra:
         texts.append(extra)
     for text in texts:
         seen: set[str] = set()
-        for match in _NAME.findall(text or ""):
-            if not _ok(match) or match in seen:
+        for name in _runs(text):
+            if not _ok(name) or name in seen:
                 continue
-            seen.add(match)
-            counts[match] = counts.get(match, 0) + 1
-    return sorted(counts, key=lambda name: (-counts[name], -len(name.split()), name))[:4]
+            seen.add(name)
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def frequency_names(matches: list[dict], extra: str = "") -> list[str]:
+    """Rank real person names. A name in two or more titles beats a one-off headline."""
+    counts = _name_counts(matches, extra)
+    ranked = sorted(counts, key=lambda name: (-counts[name], name))
+    if any(counts[name] >= 2 for name in ranked):
+        ranked = [name for name in ranked if counts[name] >= 2]
+    return _drop_contained(ranked, counts)[:4]
 
 
 def _wife_pair(text: str) -> tuple[str, str]:
@@ -239,7 +368,7 @@ def _from_model(matches: list[dict], page_text: str) -> dict:
         return {}
     data = _json_object(answer.get("text") or "")
     names = []
-    raw_names = data.get("names") or []
+    raw_names = data.get("names") or data.get("people") or []
     if isinstance(raw_names, str):
         raw_names = [raw_names]
     for name in raw_names:
@@ -262,11 +391,13 @@ def identify(claim_text: str, matches: list[dict], context: str = "") -> dict:
     blob = _blob(matches, context)
     model = _from_model(matches, context)
     left, right = _wife_pair(blob)
+    counts = _name_counts(matches, context)
     names: list[str] = []
     for name in list(model.get("names") or []) + [left, right] + frequency_names(matches, context):
         if name and _ok(name) and name not in names:
             names.append(name)
-    names = [name for name in names if not any(name.startswith(other + " ") for other in names if other != name)]
+    names = _drop_contained(names, counts)
+    names.sort(key=lambda name: (-counts.get(name, 0), name))
     names = names[:4]
     questions = split_questions(claim_text)
     kinds = {item["kind"] for item in questions}

@@ -68,7 +68,7 @@ def receipt(web: dict, reverse: dict) -> dict:
             "detail": contents.get("detail") or "",
         },
         "youcom_answer": {
-            "label": "You.com Answer",
+            "label": "You.com Research" if answer.get("kind") == "research" else "You.com Answer",
             "status": answer.get("status") or "skipped",
             "latency_ms": int(answer.get("latency_ms") or 0),
             "citations": len(answer.get("citations") or []),

@@ -386,10 +386,11 @@ def iter_run(
                     "Pulling page text from the top results.",
                     sponsor="youcom_contents",
                 )
+                synthesis = "You.com Research" if subject.get("questions") else "You.com Answer"
                 yield _stage(
                     "youcom_answer",
                     "running",
-                    "You.com Answer",
+                    synthesis,
                     "Asking You.com for a cited synthesis.",
                     sponsor="youcom_answer",
                 )
@@ -409,7 +410,7 @@ def iter_run(
                 yield _stage(
                     "youcom_answer",
                     data["status"],
-                    "You.com Answer",
+                    "You.com Research" if data.get("kind") == "research" else "You.com Answer",
                     data.get("detail") or data.get("text") or "",
                     flags,
                     sponsor="youcom_answer",

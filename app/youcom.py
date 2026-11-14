@@ -14,6 +14,7 @@ SEARCH_URL = "https://ydc-index.io/v1/search"
 CONTENTS_URL = "https://ydc-index.io/v1/contents"
 ANSWER_URL = "https://api.you.com/v1/answer"
 RESEARCH_URL = "https://api.you.com/v1/research"
+ANSWER_MAX = 380
 
 
 def _headers() -> dict:
@@ -166,17 +167,67 @@ def _contents(urls: list[str]) -> dict:
     return {"status": "ok", "detail": f"Read {len(pages)} pages.", "pages": pages, "latency_ms": elapsed}
 
 
+def _clip_query(text: str, limit: int = ANSWER_MAX) -> str:
+    """Answer rejects any query over 400 characters."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit]
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return clipped or text[:limit]
+
+
+def _research_body(body) -> tuple[str, list]:
+    output = body.get("output") if isinstance(body, dict) else None
+    if not isinstance(output, dict):
+        return "", []
+    content = output.get("content") if isinstance(output.get("content"), str) else ""
+    citations = []
+    for source in output.get("sources") or []:
+        if not isinstance(source, dict) or not source.get("url"):
+            continue
+        snippets = source.get("snippets")
+        excerpt = " ".join(snippets)[:400] if isinstance(snippets, list) else str(source.get("snippet") or "")[:400]
+        citations.append({"url": source["url"], "title": source.get("title") or "", "excerpt": excerpt})
+    return repair_text(content), citations
+
+
+def _research(prompt: str) -> dict:
+    """Research lite accepts a long input. Answer does not."""
+    try:
+        status, body = httputil.post_json(
+            RESEARCH_URL,
+            _headers(),
+            {"input": (prompt or "")[:6000], "research_effort": "lite"},
+            timeout=40,
+        )
+    except Exception:
+        return {"status": "error", "text": "", "citations": [], "kind": "research", "detail": "You.com research failed."}
+    if status != 200 or not isinstance(body, dict):
+        return {
+            "status": "error",
+            "text": "",
+            "citations": [],
+            "kind": "research",
+            "detail": f"You.com research returned HTTP {status}.",
+        }
+    text, citations = _research_body(body)
+    return {
+        "status": "ok",
+        "text": text[:2000],
+        "citations": citations,
+        "kind": "research",
+        "detail": "Research API lite.",
+    }
+
+
 def ask(prompt: str) -> dict:
-    """One Answer call used to name who is in an image. Failures stay empty."""
+    """Name who is shown. Research lite, because the titles do not fit in Answer."""
     if not config.key("YDC_API_KEY") or not (prompt or "").strip():
         return {"status": "skipped", "text": ""}
-    try:
-        status, body = httputil.post_json(ANSWER_URL, _headers(), {"query": prompt[:4500]}, timeout=35)
-    except Exception:
-        return {"status": "error", "text": ""}
-    if status != 200 or not isinstance(body, dict):
-        return {"status": "error", "text": ""}
-    return {"status": "ok", "text": repair_text(str(body.get("answer") or ""))[:2000]}
+    result = _research(prompt)
+    return {"status": result["status"], "text": result.get("text") or ""}
 
 
 def _answer(query: str, hits: list | None = None, questions: list | None = None) -> dict:
@@ -196,55 +247,25 @@ def _answer(query: str, hits: list | None = None, questions: list | None = None)
             f"Questions: {asked}\nSources:\n" + "\n".join(lines)
         )[:6000]
     else:
-        question = (
+        question = _clip_query(
             "Is this claim true, false, or misleading based on credible reporting? "
             "Note if the timing or the context does not match. Cite sources. "
             f"Claim: {query}"
-        )[:1500]
-    if config.flag("YDC_USE_RESEARCH"):
-        status, body = httputil.post_json(
-            RESEARCH_URL,
-            _headers(),
-            {"input": question, "research_effort": "lite"},
-            timeout=25,
         )
+    if questions or config.flag("YDC_USE_RESEARCH"):
+        result = _research(question)
         elapsed = _ms(started)
-        if status != 200 or not isinstance(body, dict):
-            sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=0, status="error")
-            return {
-                "status": "error",
-                "detail": f"You.com research returned HTTP {status}.",
-                "text": "",
-                "citations": [],
-                "kind": "research",
-                "latency_ms": elapsed,
-            }
-        output = body.get("output") or {}
-        content = output.get("content") if isinstance(output, dict) else ""
-        if not isinstance(content, str):
-            content = ""
-        citations = []
-        for source in (output.get("sources") or []) if isinstance(output, dict) else []:
-            if isinstance(source, dict) and source.get("url"):
-                citations.append(
-                    {
-                        "url": source["url"],
-                        "title": source.get("title") or "",
-                        "excerpt": " ".join(source.get("snippets") or [])[:400]
-                        if isinstance(source.get("snippets"), list)
-                        else str(source.get("snippet") or "")[:400],
-                    }
-                )
-        sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=len(citations), status="ok")
-        return {
-            "status": "ok",
-            "detail": "Research API lite.",
-            "text": repair_text(content[:1200]),
-            "citations": citations,
-            "kind": "research",
-            "latency_ms": elapsed,
-        }
+        result["latency_ms"] = elapsed
+        sponsors.record(
+            "youcom_answer",
+            called=True,
+            latency_ms=elapsed,
+            citations=len(result.get("citations") or []),
+            status=result["status"],
+        )
+        return result
 
+    question = _clip_query(question)
     status, body = httputil.post_json(
         ANSWER_URL,
         _headers(),
