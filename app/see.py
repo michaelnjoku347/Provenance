@@ -6,7 +6,7 @@ import base64
 import time
 from urllib.parse import quote
 
-from app import config, httputil, sponsors, vision
+from app import config, httputil, vision
 
 _QUERIES = (
     "image captioning",
@@ -123,12 +123,10 @@ def _treg(image_url: str, image: bytes, media_type: str) -> dict:
             timeout=40,
         )
     except Exception:
-        sponsors.record("see", called=True, latency_ms=_ms(started), status="error")
-        return {**empty, "status": "error", "tool": tool, "detail": "Treg vision call failed.", "latency_ms": _ms(started)}
+            return {**empty, "status": "error", "tool": tool, "detail": "Treg vision call failed.", "latency_ms": _ms(started)}
     elapsed = _ms(started)
     text = _text_from(result)
     if called != 200 or not text:
-        sponsors.record("see", called=True, latency_ms=elapsed, status="error")
         return {
             **empty,
             "status": "error",
@@ -137,7 +135,6 @@ def _treg(image_url: str, image: bytes, media_type: str) -> dict:
             "detail": f"Treg vision returned HTTP {called}.",
             "latency_ms": elapsed,
         }
-    sponsors.record("see", called=True, latency_ms=elapsed, status="ok")
     return {
         "status": "ok",
         "text": text[:800],
@@ -149,13 +146,15 @@ def _treg(image_url: str, image: bytes, media_type: str) -> dict:
 
 
 def describe(image_url: str, image: bytes, media_type: str, caption: str) -> dict:
-    """Never raises. Vision is optional; the check continues either way."""
-    try:
-        seen = _treg(image_url, image, media_type)
-    except Exception:
-        seen = {"status": "error", "text": "", "provider": "", "tool": "", "latency_ms": 0, "detail": "Treg vision failed."}
-    if seen.get("text"):
-        return seen
+    """Gemini (or a pinned Treg vision tool) assists. Lens, not this call, identifies the photo."""
+    seen = {"status": "skipped", "text": "", "provider": "", "tool": "", "latency_ms": 0, "detail": ""}
+    if config.key("TREG_VISION_TOOL") and config.key("TREG_API_KEY"):
+        try:
+            seen = _treg(image_url, image, media_type)
+        except Exception:
+            seen = {"status": "error", "text": "", "provider": "", "tool": "", "latency_ms": 0, "detail": "Treg vision failed."}
+        if seen.get("text"):
+            return seen
     if image and (config.key("OPENAI_API_KEY") or config.key("GEMINI_API_KEY")):
         started = time.perf_counter()
         try:
@@ -171,7 +170,7 @@ def describe(image_url: str, image: bytes, media_type: str, caption: str) -> dic
                 "provider": "Gemini" if config.key("GEMINI_API_KEY") and not config.key("OPENAI_API_KEY") else "OpenAI",
                 "tool": "",
                 "latency_ms": _ms(started),
-                "detail": stage.get("detail") or "Described with a vision model.",
+                "detail": "vision assist",
             }
         return {
             "status": stage.get("status") or "error",

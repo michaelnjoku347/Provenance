@@ -13,6 +13,10 @@ _CALLS = {
     "youcom_contents": 0,
     "youcom_answer": 0,
     "treg": 0,
+    "treg_news": 0,
+    "treg_web": 0,
+    "treg_profile": 0,
+    "treg_replies": 0,
     "x402": 0,
 }
 _LAST: dict[str, dict] = {}

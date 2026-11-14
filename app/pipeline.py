@@ -6,7 +6,9 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Iterator
 
-from app import config, credentials, detector, explain, httputil, links, questions, reverse_image, samples, see, sponsors, store, verdict, youcom
+from concurrent.futures import ThreadPoolExecutor
+
+from app import config, credentials, detector, explain, httputil, links, questions, reverse_image, samples, see, sponsors, store, treg, verdict, youcom
 
 
 def _stage_error(name: str) -> dict:
@@ -116,7 +118,40 @@ def _download_image(image_url: str) -> tuple[bytes, str]:
     return data, media or "image/jpeg"
 
 
-def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link=None, subject=None, image_from_url=False) -> dict:
+def _x_target(url: str) -> tuple[str, str]:
+    if not links.is_status_url(url):
+        return "", ""
+    parts = [part for part in urlparse_path(url).split("/") if part]
+    if len(parts) >= 3 and parts[1] == "status" and parts[2].isdigit() and parts[0].lower() not in {"i", "intent", "share"}:
+        return parts[0], parts[2]
+    return "", ""
+
+
+def urlparse_path(url: str) -> str:
+    from urllib.parse import urlparse
+
+    return urlparse(url).path
+
+
+def _safe_future(future):
+    if future is None:
+        return {"status": "skipped", "detail": "", "hits": [], "latency_ms": 0, "results": 0, "replies": [], "profile": {}}
+    try:
+        return future.result()
+    except Exception:
+        return {"status": "error", "detail": "Treg call failed. The check continued.", "hits": [], "latency_ms": 0, "results": 0, "replies": [], "profile": {}}
+
+
+def _stage_row(result: dict) -> dict:
+    return {
+        "status": result.get("status") or "skipped",
+        "detail": result.get("detail") or "",
+        "latency_ms": int(result.get("latency_ms") or 0),
+        "results": int(result.get("results") if result.get("results") is not None else len(result.get("hits") or result.get("replies") or [])),
+    }
+
+
+def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link=None, subject=None, image_from_url=False, treg_extra=None) -> dict:
     link = link or {}
     decision = verdict.decide(claim, creds, web, reverse, prior, posted_at=link.get("posted_at") or "")
     checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -139,7 +174,16 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
                 "detail": web["contents"].get("detail", ""),
             },
             "youcom_answer": {"status": web["answer"]["status"], "detail": web["answer"].get("detail", "")},
-            "reverse_image": {"status": reverse["status"], "detail": reverse.get("detail", "")},
+            "reverse_image": {
+                "status": reverse["status"],
+                "detail": reverse.get("detail", ""),
+                "latency_ms": int(reverse.get("latency_ms") or 0),
+                "results": len(reverse.get("matches") or []),
+            },
+            "treg_news": _stage_row((treg_extra or {}).get("news") or {}),
+            "treg_web": _stage_row((treg_extra or {}).get("web") or {}),
+            "treg_profile": _stage_row((treg_extra or {}).get("profile") or {}),
+            "treg_replies": _stage_row((treg_extra or {}).get("replies") or {}),
             "detector": {"status": prior["status"], "detail": prior["note"]},
         },
         "credentials": {
@@ -168,6 +212,8 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
         "receipt_id": cache_key[:12],
         "cache": {"hit": False, "key": cache_key[:12]},
         "sponsors": sponsors.receipt(web, reverse),
+        "poster": ((treg_extra or {}).get("profile") or {}).get("profile") or {},
+        "pushback": ((treg_extra or {}).get("replies") or {}).get("replies") or [],
     }
     if demo_id:
         result["preview_url"] = f"/api/demos/{demo_id}/image"
@@ -263,91 +309,104 @@ def iter_run(
         [{"label": f"Weak prior {prior['score']:.2f}", "tone": "neutral"}],
     )
 
-    yield _stage("vision", "running", "SEE", "Describing the image, its subject, and any text.", sponsor="see")
-    try:
-        seen = see.describe(image_url, image, media_type, claim_text)
-    except Exception:
-        seen = {
-            "status": "error",
-            "text": "",
-            "provider": "",
-            "detail": "Vision step unavailable. The check continued.",
-            "latency_ms": 0,
-        }
-    reverse = None
     reverse_url = image_url
     if link.get("kind") == "status":
         reverse_url = link.get("image_url") or ""
     elif link.get("kind") == "article":
         reverse_url = ""
-    if not seen.get("text") and reverse_url.startswith("http"):
+    yield _stage("reverse_image", "running", "Treg Lens", "Identifying the photo from visual matches.", sponsor="treg_lens")
+    if reverse_url.startswith("http"):
         try:
             reverse = reverse_image.lookup(reverse_url)
         except Exception:
-            reverse = {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0}
-        try:
-            fallback = see.from_matches(reverse.get("matches") or [], claim_text)
-        except Exception:
-            fallback = {"text": ""}
-        if fallback.get("text"):
-            seen = fallback
-        elif "continued" not in (seen.get("detail") or "").lower():
-            seen["detail"] = ((seen.get("detail") or "Vision step unavailable.") + " The check continued.").strip()
-    claim = {
-        "text": claim_text,
-        "who": "",
-        "what": seen.get("what") or "",
-        "where": "",
-        "when": "",
-        "search_query": (seen.get("text") or claim_text or "")[:300],
-        "source": "vision" if seen.get("text") else ("caption" if claim_text else "none"),
-        "seen": seen.get("text") or "",
-    }
-    if link.get("search_query") and not seen.get("text"):
-        claim["search_query"] = str(link["search_query"])[:300]
-    vision_stage = {"status": seen.get("status") or "skipped", "detail": seen.get("detail") or ""}
-    yield _stage(
-        "vision",
-        vision_stage["status"],
-        "SEE",
-        vision_stage["detail"],
-        [{"label": (seen.get("text") or "Vision unavailable")[:80], "tone": "neutral"}],
-        sponsor="see",
-        stats={"latency_ms": int(seen.get("latency_ms") or 0), "provider": seen.get("provider") or ""},
-    )
-
-    query = (claim.get("search_query") or claim.get("text") or "").strip()
-    if query.lower().startswith("no caption"):
-        query = ""
-
-    yield _stage("reverse_image", "running", "FIND", "Treg reverse image and earlier appearances.", sponsor="find")
-
-    if reverse is None and reverse_url.startswith("http"):
-        try:
-            reverse = reverse_image.lookup(reverse_url)
-        except Exception:
-            reverse = {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0}
-    elif reverse is None:
+            reverse = {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0, "knowledge_title": ""}
+    else:
         reverse = {
             "status": "skipped",
             "detail": "Reverse image needs a public image URL.",
             "matches": [],
             "tool": "",
             "latency_ms": 0,
+            "knowledge_title": "",
         }
     matches = reverse.get("matches") or []
+    lens_name = (reverse.get("knowledge_title") or "").strip()
+    if not lens_name and matches:
+        lens_name = str(matches[0].get("title") or "").strip()
     rev_flags = [{"label": m.get("title") or m.get("url") or "Match", "tone": "neutral"} for m in matches[:3]]
+    if lens_name:
+        rev_flags = [{"label": lens_name[:80], "tone": "neutral"}] + rev_flags[:2]
     if not matches and "add key" in (reverse.get("detail") or ""):
         rev_flags = [{"label": "Treg: add key", "tone": "neutral"}]
     yield _stage(
         "reverse_image",
         reverse.get("status") or "error",
-        "FIND",
-        reverse.get("detail") or "",
+        "Treg Lens",
+        reverse.get("detail") or "Identified by Treg Google Lens.",
         rev_flags,
-        sponsor="treg",
+        sponsor="treg_lens",
         stats={"latency_ms": int(reverse.get("latency_ms") or 0), "matches": len(matches)},
     )
+
+    yield _stage("vision", "running", "Gemini", "vision assist", sponsor="gemini")
+    try:
+        assist = see.describe(image_url, image, media_type, claim_text)
+    except Exception:
+        assist = {
+            "status": "error",
+            "text": "",
+            "what": "",
+            "provider": "",
+            "detail": "Vision assist unavailable. The check continued.",
+            "latency_ms": 0,
+        }
+    if lens_name:
+        seen_text = f"Identified by Treg Google Lens: {lens_name}"
+    elif assist.get("text"):
+        seen_text = assist["text"]
+    else:
+        seen_text = ""
+        if matches:
+            try:
+                fallback = see.from_matches(matches, claim_text)
+            except Exception:
+                fallback = {}
+            if fallback.get("text"):
+                seen_text = fallback["text"]
+                assist = fallback
+    if assist.get("text") and lens_name and assist["text"] not in seen_text:
+        assist_note = "vision assist"
+    else:
+        assist_note = assist.get("detail") or ""
+    if "continued" not in (assist_note or "").lower() and not lens_name:
+        assist_note = ((assist_note or "Vision assist unavailable.") + " The check continued.").strip()
+    claim = {
+        "text": claim_text,
+        "who": "",
+        "what": assist.get("what") or "",
+        "where": "",
+        "when": "",
+        "search_query": (seen_text or claim_text or "")[:300],
+        "source": "lens" if lens_name else ("vision" if seen_text else ("caption" if claim_text else "none")),
+        "seen": seen_text,
+    }
+    if link.get("search_query") and not seen_text:
+        claim["search_query"] = str(link["search_query"])[:300]
+    vision_status = "ok" if assist.get("text") or lens_name else (assist.get("status") or "skipped")
+    vision_stage = {"status": vision_status, "detail": "vision assist" if assist.get("text") else (assist_note or "vision assist skipped")}
+    yield _stage(
+        "vision",
+        vision_stage["status"],
+        "Gemini" if assist.get("provider") in {"Gemini", "OpenAI"} else "SEE",
+        vision_stage["detail"],
+        [{"label": (assist.get("text") or seen_text or "Vision assist skipped")[:80], "tone": "neutral"}],
+        sponsor="gemini" if assist.get("provider") else "see",
+        stats={"latency_ms": int(assist.get("latency_ms") or 0), "provider": "vision assist" if assist.get("text") else (assist.get("provider") or "")},
+    )
+
+    query = (claim.get("search_query") or claim.get("text") or "").strip()
+    if query.lower().startswith("no caption"):
+        query = ""
 
     subject = {}
     try:
@@ -364,58 +423,83 @@ def iter_run(
         claim["search_query"] = query
 
     yield _stage("youcom_search", "running", "PROVE", query or "Searching credible sources for the claim.", sponsor="prove")
+    yield _stage("treg_news", "running", "Treg News", "Fresh headlines for the same query.", sponsor="treg_news")
+    yield _stage("treg_web", "running", "Treg Web", "Cross-checking the open web.", sponsor="treg_web")
+
+    status_url = image_url if links.is_status_url(image_url) else (link.get("url") if links.is_status_url(link.get("url") or "") else "")
+    x_user, x_id = _x_target(status_url)
+    if x_user:
+        yield _stage("treg_profile", "running", "Treg X profile", f"@{x_user}", sponsor="treg_profile")
+    if x_id:
+        yield _stage("treg_replies", "running", "Treg X replies", "Reading replies for pushback.", sponsor="treg_replies")
 
     web = {"search": {}, "contents": {}, "answer": {}}
+    treg_extra = {}
     try:
-        for name, data in youcom.iter_investigate(query, subject.get("questions") or None):
-            web[name] = data
-            if name == "search":
-                yield _stage(
-                    "youcom_search",
-                    data["status"],
-                    "PROVE",
-                    data.get("detail") or "",
-                    _search_flags(data),
-                    sponsor="youcom_search",
-                    stats={"latency_ms": int(data.get("latency_ms") or 0), "results": len(data.get("hits") or [])},
-                )
-                yield _stage(
-                    "youcom_contents",
-                    "running",
-                    "You.com Contents",
-                    "Pulling page text from the top results.",
-                    sponsor="youcom_contents",
-                )
-                synthesis = "You.com Research" if subject.get("questions") else "You.com Answer"
-                yield _stage(
-                    "youcom_answer",
-                    "running",
-                    synthesis,
-                    "Asking You.com for a cited synthesis.",
-                    sponsor="youcom_answer",
-                )
-            elif name == "contents":
-                yield _stage(
-                    "youcom_contents",
-                    data["status"],
-                    "You.com Contents",
-                    data.get("detail") or "",
-                    sponsor="youcom_contents",
-                    stats={"latency_ms": int(data.get("latency_ms") or 0), "pages": len(data.get("pages") or [])},
-                )
-            elif name == "answer":
-                flags = []
-                if data.get("text"):
-                    flags.append({"label": data["text"][:80], "tone": "neutral"})
-                yield _stage(
-                    "youcom_answer",
-                    data["status"],
-                    "You.com Research" if data.get("kind") == "research" else "You.com Answer",
-                    data.get("detail") or data.get("text") or "",
-                    flags,
-                    sponsor="youcom_answer",
-                    stats={"latency_ms": int(data.get("latency_ms") or 0), "citations": len(data.get("citations") or [])},
-                )
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            news_f = pool.submit(treg.news, query) if query else None
+            web_f = pool.submit(treg.web, query) if query else None
+            profile_f = pool.submit(treg.profile, x_user) if x_user else None
+            replies_f = pool.submit(treg.comments, x_id, status_url) if x_id else None
+            for name, data in youcom.iter_investigate(query, subject.get("questions") or None):
+                if name == "search":
+                    treg_extra["news"] = _safe_future(news_f)
+                    treg_extra["web"] = _safe_future(web_f)
+                    data["hits"] = treg.merge_hits(
+                        list(data.get("hits") or []),
+                        list(treg_extra["news"].get("hits") or []) + list(treg_extra["web"].get("hits") or []),
+                    )
+                    web[name] = data
+                    yield _stage(
+                        "youcom_search",
+                        data["status"],
+                        "PROVE",
+                        data.get("detail") or "",
+                        _search_flags(data),
+                        sponsor="youcom_search",
+                        stats={"latency_ms": int(data.get("latency_ms") or 0), "results": len(data.get("hits") or [])},
+                    )
+                    yield _stage(
+                        "youcom_contents",
+                        "running",
+                        "You.com Contents",
+                        "Pulling page text from the top results.",
+                        sponsor="youcom_contents",
+                    )
+                    synthesis = "You.com Research" if subject.get("questions") else "You.com Answer"
+                    yield _stage(
+                        "youcom_answer",
+                        "running",
+                        synthesis,
+                        "Asking You.com for a cited synthesis.",
+                        sponsor="youcom_answer",
+                    )
+                elif name == "contents":
+                    web[name] = data
+                    yield _stage(
+                        "youcom_contents",
+                        data["status"],
+                        "You.com Contents",
+                        data.get("detail") or "",
+                        sponsor="youcom_contents",
+                        stats={"latency_ms": int(data.get("latency_ms") or 0), "pages": len(data.get("pages") or [])},
+                    )
+                elif name == "answer":
+                    web[name] = data
+                    treg_extra["profile"] = _safe_future(profile_f)
+                    treg_extra["replies"] = _safe_future(replies_f)
+                    flags = []
+                    if data.get("text"):
+                        flags.append({"label": data["text"][:80], "tone": "neutral"})
+                    yield _stage(
+                        "youcom_answer",
+                        data["status"],
+                        "You.com Research" if data.get("kind") == "research" else "You.com Answer",
+                        data.get("detail") or data.get("text") or "",
+                        flags,
+                        sponsor="youcom_answer",
+                        stats={"latency_ms": int(data.get("latency_ms") or 0), "citations": len(data.get("citations") or [])},
+                    )
     except Exception:
         web = {
             "search": {"status": "error", "detail": "You.com failed.", "hits": []},
@@ -425,6 +509,24 @@ def iter_run(
         yield _stage("youcom_search", "error", "Search failed", "You.com failed.")
         yield _stage("youcom_contents", "error", "Could not read sources", "Contents failed.")
         yield _stage("youcom_answer", "error", "Synthesis failed", "Answer failed.")
+
+    for key, label, sponsor in (
+        ("news", "Treg News", "treg_news"),
+        ("web", "Treg Web", "treg_web"),
+        ("profile", "Treg X profile", "treg_profile"),
+        ("replies", "Treg X replies", "treg_replies"),
+    ):
+        row = treg_extra.get(key)
+        if not row:
+            continue
+        yield _stage(
+            sponsor,
+            row.get("status") or "skipped",
+            label,
+            row.get("detail") or "",
+            sponsor=sponsor,
+            stats={"latency_ms": int(row.get("latency_ms") or 0), "results": int(row.get("results") or len(row.get("hits") or row.get("replies") or []))},
+        )
 
     paywall = config.paywall_on()
     yield _stage(
@@ -439,7 +541,7 @@ def iter_run(
 
     yield _stage("verdict", "running", "Judging the claim", "Comparing sources and dates with what the claim says.")
     result = _assemble(
-        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link, subject, image_from_url
+        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link, subject, image_from_url, treg_extra
     )
     tone = "real" if result["verdict"] == "True" else "fake" if result["verdict"] == "False" else "verdict"
     yield _stage(

@@ -733,7 +733,7 @@ def _sources(hits: list[dict], matches: list[dict]) -> list[dict]:
                 "excerpt": "Visual match from reverse image.",
                 "page_age": match.get("date") or "",
                 "credible": is_credible(url),
-                "found_by": "Treg",
+                "found_by": "Treg Lens",
             }
         )
     return rows

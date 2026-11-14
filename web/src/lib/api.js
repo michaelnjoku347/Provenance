@@ -1,13 +1,17 @@
 export const STAGE_FALLBACK = [
   { id: 'credentials', label: 'Read EXIF and C2PA' },
   { id: 'detector', label: 'Note a weak AI-image prior' },
-  { id: 'vision', label: 'SEE' },
-  { id: 'youcom_search', label: 'PROVE' },
-  { id: 'youcom_contents', label: 'Read sources' },
-  { id: 'youcom_answer', label: 'Cited synthesis' },
-  { id: 'reverse_image', label: 'FIND' },
+  { id: 'reverse_image', label: 'Treg Lens' },
+  { id: 'vision', label: 'Gemini' },
+  { id: 'treg_news', label: 'Treg News' },
+  { id: 'treg_web', label: 'Treg Web' },
+  { id: 'treg_profile', label: 'Treg X profile' },
+  { id: 'treg_replies', label: 'Treg X replies' },
+  { id: 'youcom_search', label: 'You.com Search' },
+  { id: 'youcom_contents', label: 'You.com Contents' },
+  { id: 'youcom_answer', label: 'You.com Research' },
+  { id: 'x402', label: 'XDC x402' },
   { id: 'verdict', label: 'Judge the claim' },
-  { id: 'x402', label: 'XDC x402 pay-per-verify' },
 ]
 
 function parseEvent(block) {

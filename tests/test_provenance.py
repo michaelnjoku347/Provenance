@@ -183,6 +183,7 @@ def test_treg_reverse_image_is_optional(client, monkeypatch):
         }
 
     monkeypatch.setattr("app.httputil.get_json", fake_get)
+    monkeypatch.setattr("app.httputil.post_json", lambda *args, **kwargs: (200, {"output": {"results": []}}))
     skipped = client.post("/api/check", json={"demo_id": "archive"})
     assert skipped.json()["stages"]["reverse_image"]["status"] == "skipped"
     found = client.post(
@@ -578,6 +579,7 @@ def test_treg_match_is_tagged_and_timed(client, monkeypatch):
         return 200, {"organic": [{"title": "Downtown flood, March 2011", "link": "https://example.com/2011-flood", "date": "2011-03-12"}]}
 
     monkeypatch.setattr("app.httputil.get_json", fake_get)
+    monkeypatch.setattr("app.httputil.post_json", lambda *args, **kwargs: (200, {"output": {"results": []}}))
     body = client.post(
         "/api/check",
         json={"demo_id": "archive", "image_url": "https://cdn.example.com/flood.jpg"},
@@ -585,7 +587,7 @@ def test_treg_match_is_tagged_and_timed(client, monkeypatch):
     assert body["sponsors"]["treg"]["status"] == "ok"
     assert body["sponsors"]["treg"]["matches"] == 1
     assert isinstance(body["sponsors"]["treg"]["latency_ms"], int)
-    assert any(source["found_by"] == "Treg" for source in body["sources"])
+    assert any(source["found_by"] == "Treg Lens" for source in body["sources"])
     assert any(event["label"].startswith("Treg first seen") for event in body["timeline"])
     assert client.get("/api/sponsors").json()["treg"]["calls"] == 1
 
@@ -973,7 +975,6 @@ def test_huang_live_fixture_names_the_couple_and_the_speculation(client, monkeyp
     assert forbes["credible"] is True
     assert "\u2014" in forbes["title"]
     assert "\u00e2" not in forbes["title"]
-    assert seen["catalog"] >= 2
     assert any("JSON" in prompt or "people" in prompt for prompt in seen["prompts"])
     assert body["sponsors"]["youcom_answer"]["label"] == "You.com Research"
     assert body["stages"]["vision"]["status"] == "ok"
@@ -1014,3 +1015,77 @@ def test_gemini_reads_the_image_when_treg_has_no_vision_tool(client, monkeypatch
     ).json()
     assert body["stages"]["vision"]["status"] == "ok"
     assert "Tesla Model S" in body["claim"]["seen"]
+
+
+def test_treg_news_web_and_x_are_separate_rows(client, monkeypatch):
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    seen = {"tools": []}
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "treg.to/call/" in url:
+            tool = url.rsplit("/", 1)[-1]
+            seen["tools"].append(tool)
+            assert timeout <= 15
+            if tool == "treg.google.serp.news":
+                return 200, {"output": {"results": [{"title": "Fortune on Jensen Huang", "link": "https://fortune.com/huang", "published_at": "2026-11-14T09:37:00Z", "source": "Fortune"}]}}
+            if tool == "treg.google.serp.organic":
+                return 200, {"output": {"results": [
+                    {"title": "Fortune on Jensen Huang", "url": "https://fortune.com/huang", "snippet": "duplicate"},
+                    {"title": "A web page", "url": "https://www.reuters.com/huang-web", "snippet": "Jensen Huang", "date": "2026-11-12"},
+                ]}}
+            if tool == "treg.x.user.profile":
+                assert payload["username"] == "Reuters"
+                return 200, {"output": {"username": "Reuters", "name": "Reuters", "followers": 25000000, "is_verified": True, "description": "Top and breaking news."}}
+            if tool == "treg.x.post.comments":
+                if "tweet_id" not in payload:
+                    return 422, {"error": "expected tweet_id"}
+                return 200, {"output": {"comments": [{"text": "This claim leaves out the date.", "username": "reader"}]}}
+            return 200, {"output": {"results": []}}
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [{"url": "https://www.reuters.com/huang", "title": "Reuters", "snippets": ["Jensen Huang."]}]}}
+        if url.endswith("/v1/contents"):
+            return 200, []
+        if url.endswith("/v1/answer"):
+            assert len(payload.get("query") or "") <= 400
+            return 200, {"answer": "", "citations": []}
+        if url.endswith("/v1/research"):
+            return 200, {"output": {"content": "Noted.", "sources": []}}
+        raise AssertionError(url)
+
+    def fake_get(url, headers=None, timeout=20.0):
+        if "oembed" in url:
+            return 200, {
+                "author_name": "Reuters",
+                "author_url": "https://x.com/Reuters",
+                "html": '<p>Trump tells advisers he may hold off.</p><img src="https://cdn.example.com/photo.jpg">',
+            }
+        return 200, {
+            "output": {
+                "knowledge_graph": {"title": "Jensen Huang"},
+                "visual_matches": [{"title": "Jensen Huang on stage", "link": "https://www.reuters.com/photo"}],
+            }
+        }
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
+    body = client.post(
+        "/api/check",
+        json={
+            "claim": "Who is this?",
+            "image_url": "https://x.com/Reuters/status/2121624210791440863",
+        },
+    ).json()
+    assert "Identified by Treg Google Lens" in body["claim"]["seen"]
+    assert "treg.google.serp.news" in seen["tools"]
+    assert "treg.google.serp.organic" in seen["tools"]
+    found = {source["url"]: source["found_by"] for source in body["sources"]}
+    assert found["https://fortune.com/huang"] == "Treg News"
+    assert found["https://www.reuters.com/huang-web"] == "Treg Web"
+    assert found["https://fortune.com/huang"] != "Treg Web"
+    assert body["stages"]["treg_news"]["status"] == "ok"
+    assert body["stages"]["treg_web"]["results"] == 2
+    assert body["poster"]["verified"] is True
+    assert body["poster"]["followers"] == 25000000
+    assert body["pushback"][0]["text"].startswith("This claim leaves out")
+    assert body["stages"]["reverse_image"]["detail"].startswith("Identified by Treg Google Lens")

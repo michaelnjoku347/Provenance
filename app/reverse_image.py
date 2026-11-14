@@ -29,7 +29,7 @@ def _matches(body: dict) -> list[dict]:
                     }
                 )
             for key, value in node.items():
-                walk(value, preferred or key in {"organic", "visual_matches", "exact_matches", "matches"})
+                walk(value, preferred or key in {"organic", "visual_matches", "exact_matches", "matches", "results", "output"})
         elif isinstance(node, list):
             for item in node:
                 walk(item, preferred)
@@ -43,6 +43,18 @@ def _matches(body: dict) -> list[dict]:
         seen.add(item["url"])
         unique.append(item)
     return unique[:6]
+
+
+def knowledge_title(body) -> str:
+    if not isinstance(body, dict):
+        return ""
+    output = body.get("output") if isinstance(body.get("output"), dict) else body
+    graph = output.get("knowledge_graph") or output.get("knowledgeGraph") or {}
+    if isinstance(graph, dict):
+        title = graph.get("title") or graph.get("name") or ""
+        if title:
+            return str(title)[:180]
+    return ""
 
 
 def lookup(image_url: str) -> dict:
@@ -70,7 +82,7 @@ def lookup(image_url: str) -> dict:
         status, body = httputil.get_json(
             endpoint,
             {"X-Treg-Token": config.key("TREG_API_KEY")},
-            timeout=25,
+            timeout=15,
         )
     except Exception:
         status, body = 0, None
@@ -80,7 +92,7 @@ def lookup(image_url: str) -> dict:
                 f"https://treg.to/call/{tool}",
                 {"X-Treg-Token": config.key("TREG_API_KEY")},
                 {"url": image_url, "gl": "us", "hl": "en"},
-                timeout=25,
+                timeout=15,
             )
         except Exception:
             return {
@@ -101,11 +113,16 @@ def lookup(image_url: str) -> dict:
             "latency_ms": elapsed,
         }
     matches = _matches(body)
+    named = knowledge_title(body)
     sponsors.record("treg", called=True, latency_ms=elapsed, matches=len(matches), status="ok")
+    detail = f"Identified by Treg Google Lens. {len(matches)} visual matches via {tool}."
+    if named:
+        detail = f"Identified by Treg Google Lens: {named}. {len(matches)} visual matches."
     return {
         "status": "ok",
-        "detail": f"{len(matches)} visual matches via {tool}.",
+        "detail": detail,
         "tool": tool,
         "matches": matches,
+        "knowledge_title": named,
         "latency_ms": elapsed,
     }

@@ -855,6 +855,55 @@ function StatusDot({ status }) {
   return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-line" />
 }
 
+function SponsorTrace({ result }) {
+  const stages = result.stages || {}
+  const rows = ['reverse_image', 'vision', 'treg_news', 'treg_web', 'treg_profile', 'treg_replies', 'youcom_search', 'youcom_contents', 'youcom_answer']
+    .map((id) => ({ id, ...(stages[id] || {}) }))
+    .filter((stage) => stage.status && stage.status !== 'skipped')
+  if (!rows.length) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {rows.map((stage) => (
+        <SponsorChip
+          key={stage.id}
+          stage={{
+            ...stage,
+            sponsor: { reverse_image: 'treg_lens', vision: 'gemini' }[stage.id] || stage.id,
+            stats: stage,
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function PosterChip({ poster }) {
+  const followers = Number(poster.followers)
+  const count = Number.isFinite(followers) ? followers.toLocaleString('en-US') : String(poster.followers || '0')
+  return (
+    <p className="rounded-full border border-line bg-[#10161d] px-3 py-1.5 text-xs text-mist">
+      Poster credibility: {poster.verified ? 'Verified' : 'Not verified'} · {count} followers
+      {poster.description ? ` · ${poster.description}` : ''}
+    </p>
+  )
+}
+
+function Pushback({ replies }) {
+  return (
+    <div className="rounded-xl border border-line bg-[#10161d] px-3 py-2">
+      <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Community pushback</p>
+      <ul className="mt-1 space-y-1">
+        {replies.slice(0, 3).map((reply) => (
+          <li key={reply.text} className="text-sm text-paper/90">
+            {reply.user ? <span className="text-cyan">@{reply.user} </span> : null}
+            {reply.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function Receipt({
   result,
   copied,
@@ -877,6 +926,9 @@ function Receipt({
 
   return (
     <div className="fade-up space-y-3 px-4 py-4 sm:px-5 sm:pb-6">
+      <SponsorTrace result={result} />
+      {result.poster?.username ? <PosterChip poster={result.poster} /> : null}
+      {result.pushback?.length ? <Pushback replies={result.pushback} /> : null}
       <AnswerCard result={result} />
       <details className="fold rounded-2xl border border-line bg-[#10161d] px-4 py-3">
         <summary className="cursor-pointer text-sm font-medium text-mist">All sources, the trace, and what could make this wrong</summary>
@@ -1108,12 +1160,18 @@ function Receipt({
 
 const SPONSOR_CHIPS = {
   see: 'SEE',
-  find: 'FIND',
-  prove: 'PROVE',
-  youcom_search: 'PROVE',
+  gemini: 'vision assist',
+  find: 'Treg Lens',
+  prove: 'You.com Search',
+  youcom_search: 'You.com Search',
   youcom_contents: 'You.com Contents',
   youcom_answer: 'You.com Answer',
-  treg: 'FIND',
+  treg: 'Treg Lens',
+  treg_lens: 'Treg Lens',
+  treg_news: 'Treg News',
+  treg_web: 'Treg Web',
+  treg_profile: 'Treg X profile',
+  treg_replies: 'Treg X replies',
   x402: 'XDC x402',
 }
 
@@ -1131,9 +1189,16 @@ function sponsorStat(stage) {
   if (stage.id === 'youcom_answer' || stage.sponsor === 'youcom_answer') {
     return stage.status !== 'running' ? 'cited synthesis' : ''
   }
-  if (stage.id === 'reverse_image' || stage.sponsor === 'treg' || stage.sponsor === 'find') {
+  if (stage.id === 'reverse_image' || stage.sponsor === 'treg' || stage.sponsor === 'treg_lens' || stage.sponsor === 'find') {
     if ((stage.detail || '').toLowerCase().includes('add key')) return 'add key'
-    return stats.matches != null && stage.status !== 'running' ? `${stats.matches} first seen` : ''
+    const count = stats.matches ?? stats.results
+    return count != null && stage.status !== 'running' ? `${count} matches` : ''
+  }
+  if (stage.id === 'treg_news' || stage.id === 'treg_web' || stage.sponsor === 'treg_news' || stage.sponsor === 'treg_web') {
+    return stats.results != null && stage.status !== 'running' ? `${stats.results} results` : ''
+  }
+  if (stage.id === 'treg_replies' || stage.sponsor === 'treg_replies') {
+    return stats.results != null && stage.status !== 'running' ? `${stats.results} replies` : ''
   }
   if (stage.id === 'x402' || stage.sponsor === 'x402') {
     return stats.mode === 'live' ? 'live' : 'test mode'
