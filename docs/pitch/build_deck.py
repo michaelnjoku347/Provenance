@@ -296,24 +296,24 @@ def slide_pipeline():
 def slide_examples():
     s = chrome(5, "From the desk")
     s += [text(96, 140, 520, 400, "Three checks we ran today.", size=40, weight="bold", spacing=1.05),
-          text(96, 560, 480, 120, "Real posts from the demo, with the verdict the desk gave.", size=17, color=MIST, spacing=1.4)]
+          text(96, 560, 460, 300, "Real posts from the demo, with the verdict the desk gave.\n\nCopacabana photo: CHr0m4tiko0, CC BY-SA 4.0, Wikimedia Commons. GTA VI art: Rockstar Games.", size=17, color=MIST, spacing=1.4)]
     rows = [
-        (None, "\u201cWhen does GTA 6 come out?\u201d", "Text question", "TRUE", LIME, "Release date confirmed by Rockstar's own sources."),
-        ("reuters-post.jpg", "Reuters post on X", "x.com/Reuters", "TRUE", LIME, "Matches Reuters reporting. The poster's profile checks out."),
-        ("copacabana.jpg", "\u201cTrump rally in Wildwood, NJ\u201d", "Viral photo", "MISLEADING", AMBER, "It's Copacabana beach in Rio, miscaptioned."),
+        (OUT / "img/gta6.jpg", "\u201cWhen does GTA 6 come out?\u201d", "Text question", "TRUE", LIME, "Release date confirmed by Rockstar's own sources."),
+        (OUT / "img/reuters-x-post.png", "Reuters post on X", "x.com/Reuters", "TRUE", LIME, "Matches Reuters reporting. The poster's profile checks out."),
+        (OUT / "img/copacabana-crowd.jpg", "\u201cTrump rally in Wildwood, NJ\u201d", "Viral photo", "MISLEADING", AMBER, "It's Copacabana beach in Rio, miscaptioned."),
     ]
-    x0, rw, rh = 680, 1144, 270
+    x0, rw, rh = 600, 1224, 270
     for i, (img, claim, kind, v, c, why) in enumerate(rows):
         y = 140 + i * rh
         s.append(hrule(x0, y, rw))
         if img:
-            s.append(image(x0, y + 24, 330, 220, cover(SAMPLES / img, 330, 220, f"s5-{i}", focus=(0, 0))))
+            s.append(image(x0, y + 17, 400, 236, cover(img, 400, 236, f"s5-{i}", focus=(0.5, 0.0 if i == 1 else 0.45))))
         else:
             s += [rect(x0, y + 24, 330, 220, fill="#151A21"),
                   text(x0 + 24, y + 24, 282, 220, "GTA 6?", size=40, weight="bold", color=PAPER, anchor="middle")]
-        s += [text(x0 + 366, y + 30, 760, 30, kind.upper(), size=11, color=MIST, weight="bold", tracking=0.16),
-              text(x0 + 366, y + 66, 560, 90, claim, size=20, weight="semibold", spacing=1.2),
-              text(x0 + 366, y + 176, 760, 60, why, size=15, color=MIST, spacing=1.35)]
+        s += [text(x0 + 436, y + 30, 760, 30, kind.upper(), size=11, color=MIST, weight="bold", tracking=0.16),
+              text(x0 + 436, y + 66, 560, 90, claim, size=20, weight="semibold", spacing=1.2),
+              text(x0 + 436, y + 176, 760, 60, why, size=15, color=MIST, spacing=1.35)]
         b, bw = badge(0, y + 30, v, c, size=15, h=48)
         for it in b:
             it["x"] = x0 + rw - bw
@@ -328,17 +328,10 @@ def slide_examples():
 def slide_sponsors():
     s = chrome(6, "Sponsor tools")
     s += [text(96, 150, 1728, 120, "You watch every tool do its job.", size=50, weight="bold", spacing=1.04),
-          text(96, 290, 1400, 80, "Each step shows the tool, how long it took and what it found.", size=20, color=MIST)]
-    rows = [("Treg Lens", "matches"), ("Treg News", "results"), ("Treg Web", "results"), ("Treg X replies", "replies"),
-            ("You.com Search", "results"), ("You.com Contents", "pages"), ("You.com Answer", "cited synthesis"), ("XDC x402", "test mode or live, $0.02")]
-    s += [text(96, 470, 500, 30, "TOOL", size=11, color=MIST, weight="bold", tracking=0.16),
-          text(760, 470, 500, 30, "SHOWN LIVE", size=11, color=MIST, weight="bold", tracking=0.16)]
-    for i, (t, r) in enumerate(rows):
-        y = 510 + i * 48
-        s += [hrule(96, y, 1728, t=1),
-              text(96, y, 460, 48, t, size=16, weight="semibold", anchor="middle"),
-              text(760, y, 1064, 48, "time taken, " + r if not r.startswith("test") else r, size=15, color=MIST, anchor="middle")]
-    s.append(hrule(96, 510 + 8 * 48, 1728, t=1))
+          text(96, 290, 1728, 80, "The live check panel: every step names its tool as it runs, with time and results.", size=20, color=MIST)]
+    panel = OUT / "img/app-live-check.png"
+    s += [image(96, 390, 1728, 600, cover(panel, 1728, 600, "s6-panel", focus=(0, 0))),
+          rect(96, 390, 1728, 600, line=RULE, lw=2)]
     notes = ("While a check runs, each step lights up with the sponsor tool's name, its latency, and how many results it found. "
              "Nothing's hidden: you see You.com, Treg and XDC doing the work.")
     return s, notes
