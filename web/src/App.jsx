@@ -280,6 +280,7 @@ export default function App() {
           setStages((prev) => {
             const next = prev.length ? [...prev] : STAGE_FALLBACK.map((s) => ({ ...s, status: 'queued', detail: '', flags: [] }))
             const index = next.findIndex((item) => item.id === stage.id)
+            const previous = index >= 0 ? next[index] : null
             const row = {
               id: stage.id,
               label: stage.label || STAGE_FALLBACK.find((s) => s.id === stage.id)?.label || stage.id,
@@ -288,6 +289,7 @@ export default function App() {
               flags: stage.flags || [],
               sponsor: stage.sponsor || '',
               stats: stage.stats || null,
+              finding: stage.finding || previous?.finding || '',
             }
             if (index >= 0) next[index] = row
             else if (row.id === 'link') next.unshift(row)
@@ -766,17 +768,26 @@ function Hero({ src, alt, children, scanning = false }) {
 
 function ProgressPanel({ stages }) {
   const flagCount = stages.reduce((count, stage) => count + (stage.flags?.length || 0), 0)
+  const latest = [...stages].reverse().find((stage) => stage.finding)
   return (
     <div className="fade-up px-4 py-4 sm:px-5">
       <div className="flex items-end justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">Live check</p>
-          <h2 className="mt-1 text-base font-semibold">Flags appear as each step finishes</h2>
+          <h2 className="mt-1 text-base font-semibold">Findings land as each source answers</h2>
         </div>
         <div className="font-mono text-[11px] text-mist">
           {flagCount} flag{flagCount === 1 ? '' : 's'}
         </div>
       </div>
+      {latest ? (
+        <p className="finding-live mt-3 rounded-xl border border-lime/25 bg-lime/10 px-3 py-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">{latest.label}</span>
+          <span className="mt-1 block text-sm leading-5 text-paper">{latest.finding}</span>
+        </p>
+      ) : (
+        <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.14em] text-mist">Waiting for the first headline or source</p>
+      )}
       <ol className="mt-4">
         {stages.map((stage, index) => (
           <li key={stage.id} className="relative flex gap-3 pb-3.5">
@@ -793,6 +804,9 @@ function ProgressPanel({ stages }) {
                 </div>
               </div>
               {stage.detail ? <p className="mt-0.5 text-xs leading-5 text-mist">{stage.detail}</p> : null}
+              {stage.finding && !(stage.flags || []).some((flag) => flag.label === stage.finding) ? (
+                <p className="finding-live mt-1 text-sm leading-5 text-paper">{stage.finding}</p>
+              ) : null}
               {stage.flags?.length ? (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {stage.flags.map((flag, i) => (
@@ -818,13 +832,40 @@ function ProgressPanel({ stages }) {
   )
 }
 
+function confidenceReasons(result) {
+  const raw = Array.isArray(result?.confidence_reasons)
+    ? result.confidence_reasons
+    : Array.isArray(result?.answer?.confidence_reasons)
+      ? result.answer.confidence_reasons
+      : null
+  if (!raw) return []
+  return raw.filter((item) => typeof item === 'string' && item.trim())
+}
+
+function ConfidenceReasons({ result }) {
+  const reasons = confidenceReasons(result)
+  if (!reasons.length) return null
+  return (
+    <div className="mt-3">
+      <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Why this confidence</h3>
+      <ul className="mt-1.5 space-y-1">
+        {reasons.map((reason, index) => (
+          <li key={`${index}-${reason}`} className="text-sm leading-6 text-mist">
+            {reason}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function AnswerCard({ result }) {
   const answer = result.answer || {}
   const verdict = answer.verdict || result.verdict
   const theme = themeFor(verdict)
   const text = answer.text || result.summary
   const why = (answer.why || []).slice(0, 3)
-  const sources = (answer.sources || []).slice(0, 3)
+  const confidence = answer.confidence ?? result.confidence
   return (
     <article className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
       <div className="flex flex-wrap items-center gap-3">
@@ -832,16 +873,20 @@ function AnswerCard({ result }) {
           {(STAMPS[verdict] || [verdict]).join(' ')}
         </span>
         <span className="font-mono text-sm text-mist">
-          <CountUp value={answer.confidence ?? result.confidence} />% confidence
+          <CountUp value={confidence} />% confidence
         </span>
       </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink" aria-hidden="true">
+        <div className="h-full rounded-full" style={{ width: `${confidence}%`, background: theme.color }} />
+      </div>
+      <ConfidenceReasons result={result} />
       <p className="answer-line mt-4 text-lg leading-7">
         <TypeLine text={text} />
       </p>
       {answer.line ? <p className="answer-line mt-2 text-sm text-amber">{answer.line}</p> : null}
       {why.length ? (
         <ul className="mt-4 space-y-2">
-          {why.map((item, index) => (
+          {why.slice(0, 3).map((item, index) => (
             <li key={item.text} className="why-in text-sm leading-6 text-mist" style={{ animationDelay: `${180 + index * 90}ms` }}>
               {item.text}
               {item.url ? (
@@ -853,8 +898,17 @@ function AnswerCard({ result }) {
           ))}
         </ul>
       ) : null}
+    </article>
+  )
+}
+
+function SourceStack({ result }) {
+  const sources = (result.answer?.sources || []).slice(0, 3)
+  return (
+    <section className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
+      <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Sources</h3>
       {sources.length ? (
-        <div className="mt-4 grid gap-2">
+        <div className="mt-3 grid gap-2">
           {sources.map((source, index) => (
             <a
               key={source.url}
@@ -862,7 +916,7 @@ function AnswerCard({ result }) {
               target="_blank"
               rel="noreferrer"
               className="source-in rounded-xl border border-line bg-ink px-3 py-2 hover:border-lime/40"
-              style={{ animationDelay: `${360 + index * 80}ms` }}
+              style={{ animationDelay: `${index * 80}ms` }}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium">{source.title}</span>
@@ -872,8 +926,11 @@ function AnswerCard({ result }) {
             </a>
           ))}
         </div>
-      ) : null}
-    </article>
+      ) : (
+        <p className="mt-2 text-sm text-mist">No sources were attached to this receipt.</p>
+      )}
+      <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.14em] text-mist">Receipt {result.receipt_id}</p>
+    </section>
   )
 }
 
@@ -964,10 +1021,18 @@ function Receipt({
 
   return (
     <div className="fade-up space-y-3 px-4 py-4 sm:px-5 sm:pb-6">
+      {result.deadline_note ? (
+        <p className="rounded-xl border border-amber/40 bg-amber/10 px-3 py-2 text-sm leading-6 text-paper">{result.deadline_note}</p>
+      ) : null}
       <SponsorTrace result={result} />
-      {result.poster?.username ? <PosterChip poster={result.poster} /> : null}
-      {result.pushback?.length ? <Pushback replies={result.pushback} /> : null}
-      <AnswerCard result={result} />
+      <div className="grid items-start gap-3 lg:grid-cols-2">
+        <AnswerCard result={result} />
+        <div className="space-y-3">
+          <SourceStack result={result} />
+          {result.poster?.username ? <PosterChip poster={result.poster} /> : null}
+          {result.pushback?.length ? <Pushback replies={result.pushback} /> : null}
+        </div>
+      </div>
       <details className="fold rounded-2xl border border-line bg-[#10161d] px-4 py-3">
         <summary className="cursor-pointer text-sm font-medium text-mist">All sources, the trace, and what could make this wrong</summary>
         <div className="fold-body">
@@ -992,6 +1057,7 @@ function Receipt({
           <div className="mt-3 h-2 overflow-hidden rounded-full bg-ink">
             <div className="h-full rounded-full" style={{ width: `${result.confidence}%`, background: theme.color }} />
           </div>
+          <ConfidenceReasons result={result} />
           <p className="mt-3 text-sm leading-6 text-paper/85">{result.confidence_note}</p>
         </section>
 

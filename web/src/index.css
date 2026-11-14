@@ -296,6 +296,10 @@ a:focus-visible,
   }
 }
 
+.finding-live {
+  animation: fade-up 0.35s ease-out both;
+}
+
 .answer-line {
   animation: fade-up 0.45s ease 0.12s both;
 }
@@ -375,6 +379,7 @@ details.fold[open] > .fold-body {
   .chip-live,
   .fly-in,
   .desk-root,
+  .finding-live,
   .answer-line,
   .why-in,
   .source-in,
