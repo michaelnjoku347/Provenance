@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Provenance runtime receipts (regenerated locally; do not commit)
+cache/
