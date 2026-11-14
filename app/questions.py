@@ -559,6 +559,9 @@ def _who_sentence(names: list[str], role: str, relation: str) -> str:
     other = names[1] if len(names) > 1 else ""
     if who.lower().startswith("ceo "):
         who = who[4:]
+    role = " ".join((role or "").split())
+    if len(role.split()) > 5 or re.search(r"[;:,.]|\b(is|are|was|an|and)\b", role, re.I) or who.lower() in role.lower():
+        role = "Nvidia CEO" if "nvidia" in role.lower() and "ceo" in role.lower() else ""
     if role and other and relation == "wife":
         return f"This is {role} {who} and his wife {other}."
     if role and not other:
