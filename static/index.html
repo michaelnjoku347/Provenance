@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Provenance — check the story, not just the pixels</title>
+  <meta name="description" content="Provenance tells a newsroom whether a viral image is likely real, AI-generated, or out of context, and shows the receipts.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,680&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">Pr</span>
+      <div>
+        <p class="eyebrow">Ground Truth · newsroom desk</p>
+        <h1>Provenance</h1>
+      </div>
+    </div>
+    <p class="lede">Decide in minutes whether a viral image is real, generated, or out of context. The pixels are one clue. The story around them is the check.</p>
+    <div id="keys" class="chips" aria-label="Connected services"></div>
+  </header>
+
+  <main class="layout">
+    <section class="intake">
+      <form id="check-form">
+        <label class="drop" id="drop">
+          <input id="file" type="file" accept="image/jpeg,image/png,image/webp">
+          <span class="drop-kicker">Upload</span>
+          <strong>Drop a viral image</strong>
+          <span class="drop-hint">JPEG, PNG, or WebP · 8 MB max</span>
+          <img id="preview" alt="" hidden>
+        </label>
+        <label class="field" for="claim">Caption or claim <span>optional</span></label>
+        <textarea id="claim" name="claim" rows="4" placeholder="What is this image being asked to prove?"></textarea>
+        <label class="field" for="image-url">Public image URL <span>for reverse image</span></label>
+        <input id="image-url" name="image_url" type="url" placeholder="https://…" autocomplete="off">
+        <button id="submit" type="submit">Check this image</button>
+        <p id="form-error" class="form-error" hidden></p>
+      </form>
+
+      <div class="samples">
+        <div class="samples-head">
+          <h2>Demo desk</h2>
+          <p>Three synthetic samples. They are drawings, not wire photos.</p>
+        </div>
+        <div id="demo-list" class="demo-list"></div>
+      </div>
+    </section>
+
+    <section class="dossier" id="result" aria-live="polite">
+      <div class="empty" id="empty">
+        <p class="eyebrow">Receipt</p>
+        <h2>Nothing on the desk yet.</h2>
+        <p>Drop an image or open a sample. Provenance reads the claim, the file credentials, and — when You.com is connected — what credible outlets are reporting right now.</p>
+        <ol>
+          <li>Vision model writes the checkable claim.</li>
+          <li>EXIF and C2PA, if the file has them.</li>
+          <li>You.com search, page contents, and a cited answer.</li>
+          <li>A weak AI-image prior, counted as one clue only.</li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>You.com searches the live web. Treg is the optional reverse-image step. XDC AI is the pay-per-verify path at <a href="/api/x402/listing">/api/x402/listing</a>. OpenCrawl is the multiplayer tool for the agents that built this, not a call the desk makes.</p>
+    <p><a href="/docs">API docs</a> · <code>POST /api/check</code></p>
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>
