@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import config, pipeline, samples, x402
+from app import config, pipeline, samples, sponsors, x402
 
 app = FastAPI(
     title="Provenance",
@@ -133,6 +133,11 @@ def demo_image(demo_id: str):
     if sample is None:
         raise HTTPException(status_code=404, detail="Unknown demo.")
     return FileResponse(sample["path"], media_type="image/jpeg")
+
+
+@app.get("/api/sponsors")
+def sponsor_status() -> dict:
+    return sponsors.snapshot()
 
 
 @app.get("/api/meta")

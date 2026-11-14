@@ -7,6 +7,7 @@ export const STAGE_FALLBACK = [
   { id: 'youcom_answer', label: 'Cited synthesis' },
   { id: 'reverse_image', label: 'Reverse image' },
   { id: 'verdict', label: 'Judge the claim' },
+  { id: 'x402', label: 'XDC x402 pay-per-verify' },
 ]
 
 function parseEvent(block) {

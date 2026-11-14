@@ -3,7 +3,7 @@ import base64
 import pytest
 from fastapi.testclient import TestClient
 
-from app import credentials, samples
+from app import credentials, samples, sponsors
 from app.main import app
 
 
@@ -20,6 +20,7 @@ def _isolated(monkeypatch, tmp_path):
     ):
         monkeypatch.setenv(name, "")
     monkeypatch.setenv("PROVENANCE_CACHE_DIR", str(tmp_path / "cache"))
+    sponsors.reset()
 
 
 @pytest.fixture
@@ -492,3 +493,94 @@ def test_article_link_falls_back_to_the_page_title(client, monkeypatch):
     assert body["link"]["status"] == "ok"
     assert body["claim"]["text"].startswith("Crowd gathers at city hall")
     assert "Reporters described a crowd" in body["claim"]["text"]
+
+
+def test_sponsors_endpoint_lists_tools_and_test_mode(client):
+    body = client.get("/api/sponsors").json()
+    assert body["youcom"]["connected"] is False
+    assert body["treg"]["connected"] is False
+    assert body["treg"]["hint"] == "Treg: add key"
+    assert body["x402"]["mode"] == "test"
+    assert body["x402"]["price_usdc"] == "0.02"
+    assert body["opencrawl"]["runtime"] is False
+    assert "getopencrawl.com" in body["opencrawl"]["detail"]
+
+
+def test_receipt_records_youcom_stats_and_source_tool(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if url.endswith("/v1/search"):
+            return 200, {
+                "results": {
+                    "web": [
+                        {
+                            "url": "https://www.reuters.com/world/city-hall-crowd-2026-11-14/",
+                            "title": "Crowd gathers at city hall",
+                            "page_age": "2026-11-14T12:00:00",
+                            "contents": {"highlights": ["Reporters described a crowd outside city hall this morning."]},
+                        },
+                        {
+                            "url": "https://apnews.com/article/city-hall-transit",
+                            "title": "AP: City hall crowd",
+                            "page_age": "2026-11-14T13:00:00",
+                            "contents": {"highlights": ["The Associated Press reported the gathering this morning."]},
+                        },
+                    ]
+                }
+            }
+        if url.endswith("/v1/contents"):
+            return 200, {
+                "results": [
+                    {
+                        "url": "https://www.reuters.com/world/city-hall-crowd-2026-11-14/",
+                        "markdown": "Reuters reported the crowd outside city hall this morning in detail.",
+                        "metadata": {"title": "Reuters"},
+                    }
+                ]
+            }
+        if url.endswith("/v1/answer"):
+            return 200, {
+                "answer": "Multiple outlets are reporting the crowd this morning.",
+                "citations": [{"source": "https://www.bbc.com/news/city-hall", "excerpts": ["BBC reported the crowd."]}],
+            }
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    body = client.post("/api/check", json={"claim": "A crowd gathered outside city hall this morning."}).json()
+    search = body["sponsors"]["youcom_search"]
+    assert search["status"] == "ok"
+    assert search["results"] == 2
+    assert isinstance(search["latency_ms"], int)
+    assert body["sponsors"]["youcom_contents"]["pages"] == 1
+    assert body["sponsors"]["youcom_answer"]["citations"] == 1
+    assert body["sponsors"]["treg"]["detail"] == "Treg: add key"
+    assert body["sponsors"]["x402"]["mode"] == "test"
+    found = {source["url"]: source["found_by"] for source in body["sources"]}
+    assert found["https://www.reuters.com/world/city-hall-crowd-2026-11-14/"] == "You.com Contents"
+    assert found["https://apnews.com/article/city-hall-transit"] == "You.com Search"
+    assert found["https://www.bbc.com/news/city-hall"] == "You.com Answer"
+    session = client.get("/api/sponsors").json()
+    assert session["youcom_search"]["calls"] == 1
+    assert session["youcom_contents"]["calls"] == 1
+    assert session["youcom_answer"]["calls"] == 1
+
+
+def test_treg_match_is_tagged_and_timed(client, monkeypatch):
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        assert "treg.to" in url
+        return 200, {"organic": [{"title": "Downtown flood, March 2011", "link": "https://example.com/2011-flood", "date": "2011-03-12"}]}
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    body = client.post(
+        "/api/check",
+        json={"demo_id": "archive", "image_url": "https://cdn.example.com/flood.jpg"},
+    ).json()
+    assert body["sponsors"]["treg"]["status"] == "ok"
+    assert body["sponsors"]["treg"]["matches"] == 1
+    assert isinstance(body["sponsors"]["treg"]["latency_ms"], int)
+    assert any(source["found_by"] == "Treg" for source in body["sources"])
+    assert any(event["label"].startswith("Treg first seen") for event in body["timeline"])
+    assert client.get("/api/sponsors").json()["treg"]["calls"] == 1

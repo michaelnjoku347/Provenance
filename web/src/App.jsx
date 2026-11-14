@@ -114,6 +114,8 @@ export default function App() {
   const [flagNote, setFlagNote] = useState('')
   const [flagState, setFlagState] = useState('')
   const [recents, setRecents] = useState([])
+  const [sponsorStatus, setSponsorStatus] = useState(null)
+  const [x402Open, setX402Open] = useState(false)
   const inputRef = useRef(null)
   const stageRef = useRef(null)
 
@@ -131,6 +133,10 @@ export default function App() {
       .then((r) => r.json())
       .then((body) => setDemos(body.demos || []))
       .catch(() => setDemos([]))
+    fetch('/api/sponsors')
+      .then((r) => r.json())
+      .then(setSponsorStatus)
+      .catch(() => setSponsorStatus(null))
   }, [])
 
   const autoRan = useRef(false)
@@ -271,6 +277,8 @@ export default function App() {
               status: stage.status,
               detail: stage.detail || '',
               flags: stage.flags || [],
+              sponsor: stage.sponsor || '',
+              stats: stage.stats || null,
             }
             if (index >= 0) next[index] = row
             else if (row.id === 'link') next.unshift(row)
@@ -283,6 +291,10 @@ export default function App() {
           setBusy(false)
           if (payload.preview_url) setPreview(payload.preview_url)
           else if (!preview && payload.link?.image_url) setPreview(payload.link.image_url)
+          fetch('/api/sponsors')
+            .then((r) => r.json())
+            .then(setSponsorStatus)
+            .catch(() => {})
           remember(payload)
           requestAnimationFrame(() => stageRef.current?.scrollTo({ top: 0, behavior: 'smooth' }))
         },
@@ -346,7 +358,7 @@ export default function App() {
   const connected = Boolean(health?.keys?.youcom)
 
   return (
-    <div className="flex min-h-dvh flex-col bg-ink text-paper lg:h-dvh lg:overflow-hidden">
+    <div className="desk-root flex min-h-dvh flex-col bg-ink text-paper lg:h-dvh lg:overflow-hidden">
       <header className="z-30 shrink-0 border-b border-line bg-ink/90 backdrop-blur-md">
         <div className="flex h-14 items-center justify-between gap-3 px-3 sm:px-4">
           <button type="button" onClick={resetDesk} className="flex items-center gap-2.5 text-left">
@@ -489,7 +501,7 @@ export default function App() {
             ) : null}
             {mode === 'live' ? (
               <>
-                <Hero src={currentPreview} alt="Image being checked">
+                <Hero src={currentPreview} alt="Image being checked" scanning>
                   <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-ink/75 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-lime backdrop-blur">
                     <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" />
                     Live
@@ -518,6 +530,7 @@ export default function App() {
                     </div>
                   </div>
                 </Hero>
+                <X402Card status={sponsorStatus} receipt={result.sponsors} onOpen={() => setX402Open(true)} />
                 <Receipt
                   result={result}
                   copied={copied}
@@ -539,7 +552,8 @@ export default function App() {
         </section>
       </div>
 
-      <footer className="shrink-0 border-t border-line bg-[#0c1117] px-3 py-2.5 sm:px-4">
+      <footer className="shrink-0 border-t border-line bg-[#0c1117] px-3 py-2 sm:px-4">
+        <SponsorStrip status={sponsorStatus} onX402={() => setX402Open(true)} />
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <ol className="flex gap-x-4 gap-y-1 overflow-x-auto">
             {HOW.map(([num, title, detail]) => (
@@ -578,6 +592,7 @@ export default function App() {
       </footer>
 
       {helpOpen ? <HelpPanel meta={meta} onClose={() => setHelpOpen(false)} /> : null}
+      {x402Open ? <X402Dialog status={sponsorStatus} onClose={() => setX402Open(false)} /> : null}
     </div>
   )
 }
@@ -702,11 +717,12 @@ function ReadyStage({ src, title, claim }) {
   )
 }
 
-function Hero({ src, alt, children }) {
+function Hero({ src, alt, children, scanning = false }) {
   return (
-    <div className="relative h-[220px] shrink-0 overflow-hidden bg-[#05070a] sm:h-[260px] lg:h-[280px]">
+    <div className={cn('relative h-[220px] shrink-0 overflow-hidden bg-[#05070a] sm:h-[260px] lg:h-[280px]', scanning && 'scanning')}>
       {src ? <img src={src} alt={alt} className="h-full w-full object-cover" /> : null}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0d] via-[#070a0d]/15 to-[#070a0d]/25" />
+      {scanning ? <span className="scanline" aria-hidden="true" /> : null}
       {children}
     </div>
   )
@@ -745,8 +761,11 @@ function ProgressPanel({ stages }) {
             <div className="min-w-0 flex-1 rounded-xl border border-transparent px-2 py-0.5 transition" style={stage.status === 'running' ? { background: 'rgba(200,245,74,0.05)' } : undefined}>
               <div className="flex items-baseline justify-between gap-3">
                 <div className="text-sm font-medium">{stage.label}</div>
-                <div className={cn('font-mono text-[10px] uppercase tracking-wider', stage.status === 'running' ? 'text-lime' : 'text-mist')}>
-                  {STATUS_LABEL[stage.status] || stage.status}
+                <div className="flex items-center gap-2">
+                  <SponsorChip stage={stage} />
+                  <div className={cn('font-mono text-[10px] uppercase tracking-wider', stage.status === 'running' ? 'text-lime' : 'text-mist')}>
+                    {STATUS_LABEL[stage.status] || stage.status}
+                  </div>
                 </div>
               </div>
               {stage.detail ? <p className="mt-0.5 text-xs leading-5 text-mist">{stage.detail}</p> : null}
@@ -817,7 +836,7 @@ function Receipt({
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">How strong the clues are</div>
               <div className="mt-1 text-3xl font-semibold tabular-nums" style={{ color: theme.color }}>
-                {result.confidence}%
+                <CountUp value={result.confidence} />%
               </div>
             </div>
             <div className="text-right">
@@ -874,11 +893,16 @@ function Receipt({
         <h3 className="text-sm font-semibold">Sources</h3>
         <ul className="mt-3 space-y-3">
           {(result.sources || []).length ? (
-            result.sources.map((source) => (
-              <li key={source.url} className="flex items-start justify-between gap-3">
+            result.sources.map((source, index) => (
+              <li key={source.url} className="fly-in flex items-start justify-between gap-3" style={{ animationDelay: `${index * 70}ms` }}>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-[11px] text-cyan">{hostOf(source.url)}</span>
+                    {source.found_by ? (
+                      <span className="rounded-full border border-cyan/30 bg-cyan/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-cyan">
+                        {source.found_by}
+                      </span>
+                    ) : null}
                     {source.credible ? (
                       <span className="rounded-full border border-lime/20 bg-lime/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-lime">
                         Credible
@@ -1023,6 +1047,175 @@ function Receipt({
       ) : null}
     </div>
   )
+}
+
+const SPONSOR_CHIPS = {
+  youcom_search: 'You.com Search',
+  youcom_contents: 'You.com Contents',
+  youcom_answer: 'You.com Answer',
+  treg: 'Treg',
+  x402: 'XDC x402',
+}
+
+function sponsorStat(stage) {
+  const stats = stage.stats || {}
+  if (stage.id === 'youcom_search' || stage.sponsor === 'youcom_search') {
+    return stats.results != null && stage.status !== 'running' ? `${stats.results} results` : ''
+  }
+  if (stage.id === 'youcom_contents' || stage.sponsor === 'youcom_contents') {
+    return stats.pages != null && stage.status !== 'running' ? `${stats.pages} pages` : ''
+  }
+  if (stage.id === 'youcom_answer' || stage.sponsor === 'youcom_answer') {
+    return stage.status !== 'running' ? 'cited synthesis' : ''
+  }
+  if (stage.id === 'reverse_image' || stage.sponsor === 'treg') {
+    if ((stage.detail || '').toLowerCase().includes('add key')) return 'add key'
+    return stats.matches != null && stage.status !== 'running' ? `${stats.matches} first seen` : ''
+  }
+  if (stage.id === 'x402' || stage.sponsor === 'x402') {
+    return stats.mode === 'live' ? 'live' : 'test mode'
+  }
+  return ''
+}
+
+function SponsorChip({ stage }) {
+  const name = SPONSOR_CHIPS[stage.sponsor] || SPONSOR_CHIPS[stage.id]
+  if (!name) return null
+  const lit = stage.status === 'running' || stage.status === 'ok'
+  const stat = sponsorStat(stage)
+  const latency = stage.stats?.latency_ms
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider',
+        lit ? 'border-lime/50 bg-lime/15 text-lime' : 'border-line bg-ink text-mist',
+        stage.status === 'running' && 'chip-live',
+      )}
+    >
+      {name}
+      {stat ? <span className="normal-case tracking-normal text-paper/80">{stat}</span> : null}
+      {typeof latency === 'number' && stage.status !== 'running' ? <span>{latency} ms</span> : null}
+    </span>
+  )
+}
+
+function SponsorStrip({ status, onX402 }) {
+  const youcom = status?.youcom
+  const treg = status?.treg
+  const x402 = status?.x402
+  const crawl = status?.opencrawl
+  return (
+    <div className="mb-1.5 flex items-center gap-2 overflow-x-auto pb-1">
+      <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Powered by</span>
+      <span className={cn('sponsor-pill', youcom?.connected && 'sponsor-pill-on')}>
+        You.com {youcom?.connected ? 'connected' : 'offline'} · {youcom?.calls || 0} calls
+      </span>
+      <span className={cn('sponsor-pill', treg?.connected && 'sponsor-pill-on')}>
+        {treg?.connected ? `Treg · ${treg.calls || 0} calls` : 'Treg: add key'}
+      </span>
+      <button type="button" onClick={onX402} className={cn('sponsor-pill', x402?.mode === 'live' && 'sponsor-pill-on')}>
+        XDC x402 · {x402?.mode === 'live' ? 'live' : 'test'} · ${x402?.price_usdc || '0.02'}
+      </button>
+      <span className="sponsor-pill" title={crawl?.detail || ''}>
+        Built with OpenCrawl
+      </span>
+    </div>
+  )
+}
+
+function X402Card({ status, receipt, onOpen }) {
+  const info = receipt?.x402 || status?.x402 || {}
+  const price = info.price_usdc || '0.02'
+  const testMode = (info.mode || 'test') !== 'live'
+  return (
+    <section className="mx-4 mt-4 rounded-2xl border border-line bg-[#10161d] p-4 sm:mx-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">XDC x402</p>
+          <h3 className="mt-1 text-sm font-semibold">API access: ${price} per check via x402 on XDC</h3>
+          <p className="mt-1 max-w-xl text-sm leading-6 text-mist">
+            {testMode
+              ? 'Test mode. XDC_AI_KEY and XDC_PAYTO are not set, so this check was not charged. The challenge below is the same shape the live paywall returns.'
+              : 'The paywall is on. A check without a payment header receives HTTP 402. A payment header is accepted and labeled unsettled in this build.'}
+          </p>
+        </div>
+        <button type="button" onClick={onOpen} className="rounded-full border border-line px-3 py-1.5 text-sm hover:border-lime/40 hover:text-lime">
+          Show 402 challenge
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function X402Dialog({ status, onClose }) {
+  const [body, setBody] = useState(null)
+  const [simulated, setSimulated] = useState(false)
+  useEffect(() => {
+    fetch('/api/x402/check')
+      .then(async (response) => {
+        const payload = await response.json()
+        if (response.status === 402) {
+          setSimulated(false)
+          setBody(payload)
+          return
+        }
+        const amount = status?.x402?.amount || '20000'
+        setSimulated(true)
+        setBody({
+          mode: 'test',
+          note: 'Test-mode simulation. No payment is requested and nothing is charged.',
+          x402Version: 1,
+          error: 'Payment required',
+          accepts: [
+            {
+              scheme: 'exact',
+              network: 'xdc',
+              maxAmountRequired: amount,
+              asset: status?.x402?.asset || '0xfA2958CB79b0491CC627c1557F441eF849Ca8eb1',
+              payTo: 'not set',
+              description: 'Provenance claim check',
+            },
+          ],
+          live_response: payload,
+        })
+      })
+      .catch(() => setBody({ error: 'The x402 endpoint could not be read.' }))
+  }, [status])
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/70 p-4 sm:items-center">
+      <div className="max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-[#10161d] p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">x402 challenge</h2>
+            <p className="mt-1 text-sm text-mist">{simulated ? 'Test-mode simulation. Nothing is charged.' : 'Live 402 from the paywall.'}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-1 text-mist hover:text-paper">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <pre className="mt-4 overflow-x-auto rounded-xl bg-ink p-3 font-mono text-[11px] leading-5 text-paper/90">{body ? JSON.stringify(body, null, 2) : 'Loading…'}</pre>
+      </div>
+    </div>
+  )
+}
+
+function CountUp({ value }) {
+  const target = Number(value) || 0
+  const [shown, setShown] = useState(target)
+  useEffect(() => {
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reduce) return undefined
+    const start = performance.now()
+    let frame = 0
+    const tick = (now) => {
+      const progress = Math.min(1, (now - start) / 700)
+      setShown(Math.round(target * (1 - (1 - progress) ** 3)))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [target])
+  return shown
 }
 
 function LinkCard({ link }) {
