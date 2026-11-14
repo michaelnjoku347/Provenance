@@ -1,5 +1,7 @@
 import base64
 import json
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1246,3 +1248,90 @@ def test_treg_news_web_and_x_are_separate_rows(client, monkeypatch):
     assert body["poster"]["followers"] == 25000000
     assert body["pushback"][0]["text"].startswith("This claim leaves out")
     assert body["stages"]["reverse_image"]["detail"].startswith("Identified by Treg Google Lens")
+
+
+def test_news_and_youcom_search_run_together(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+    started = {}
+    gate = threading.Event()
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "treg.google.serp.news" in url or url.endswith("/v1/search"):
+            started.setdefault("at", []).append(time.perf_counter())
+            if len(started["at"]) >= 2:
+                gate.set()
+            gate.wait(1.5)
+        if "treg.to/call/" in url:
+            return 200, {"output": {"results": [{"title": "City hall headline", "link": "https://apnews.com/city", "snippet": "A crowd."}]}}
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [{"url": "https://www.reuters.com/city", "title": "Reuters on city hall", "snippets": ["Reporters described a crowd."]}]}}
+        if url.endswith("/v1/contents"):
+            return 200, {"results": []}
+        if url.endswith("/v1/answer") or url.endswith("/v1/research"):
+            return 200, {"answer": "", "citations": [], "output": {"content": "", "sources": []}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    body = client.post("/api/check", json={"claim": "A crowd gathered outside city hall this morning."}).json()
+    assert body["verdict"]
+    stamps = started.get("at") or []
+    assert len(stamps) >= 2
+    assert max(stamps) - min(stamps) < 0.4
+    assert any(source["url"] == "https://apnews.com/city" for source in body["sources"])
+
+
+def test_deadline_returns_partial_receipt(client, monkeypatch):
+    monkeypatch.setattr("app.pipeline.CHECK_DEADLINE_S", 0.35)
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "treg.google.serp.news" in url:
+            time.sleep(1.2)
+            return 200, {"output": {"results": []}}
+        if "treg.to/call/" in url:
+            return 200, {"output": {"results": [{"title": "Web headline", "link": "https://www.reuters.com/web", "snippet": "A report."}]}}
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [{"url": "https://apnews.com/fast", "title": "Fast source", "snippets": ["A crowd outside city hall."]}]}}
+        if url.endswith("/v1/contents"):
+            return 200, {"results": []}
+        if url.endswith("/v1/answer") or url.endswith("/v1/research"):
+            return 200, {"answer": "Outlets reported the crowd.", "citations": [], "output": {"content": "", "sources": []}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    started = time.perf_counter()
+    body = client.post("/api/check", json={"claim": "A crowd gathered outside city hall this morning."}).json()
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.0
+    assert body["verdict"]
+    assert "Treg News" in body["timed_out"]
+    assert "20 second deadline" in body["deadline_note"]
+    assert body["stages"]["youcom_search"]["status"] == "ok"
+    time.sleep(1.0)
+
+
+def test_stream_includes_first_headline_before_the_receipt(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "treg.google.serp.news" in url:
+            return 200, {"output": {"results": [{"title": "First headline from Treg", "link": "https://apnews.com/first", "snippet": "A crowd."}]}}
+        if "treg.to/call/" in url:
+            return 200, {"output": {"results": []}}
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [{"url": "https://www.reuters.com/first", "title": "First source from Reuters", "snippets": ["Reported."]}]}}
+        if url.endswith("/v1/contents"):
+            return 200, {"results": []}
+        if url.endswith("/v1/answer") or url.endswith("/v1/research"):
+            return 200, {"answer": "", "citations": [], "output": {"content": "", "sources": []}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    with client.stream("POST", "/api/check/stream", json={"claim": "A crowd gathered outside city hall this morning."}) as response:
+        raw = b"".join(response.iter_bytes()).decode("utf-8")
+    head = raw.split("event: result", 1)[0]
+    assert "First headline from Treg" in head
+    assert "First source from Reuters" in head
