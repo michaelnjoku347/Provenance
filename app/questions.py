@@ -349,6 +349,8 @@ def _json_object(text: str) -> dict:
 def _from_model(matches: list[dict], page_text: str) -> dict:
     if not config.key("YDC_API_KEY"):
         return {}
+    if not (matches or []) and not (page_text or "").strip():
+        return {}
     from app import youcom
 
     lines = []
@@ -380,7 +382,7 @@ def _from_model(matches: list[dict], page_text: str) -> dict:
         relation = ""
     return {
         "names": names[:4],
-        "role": " ".join(str(data.get("role") or "").split())[:80],
+        "role": " ".join((", ".join(map(str, data.get("role"))) if isinstance(data.get("role"), list) else str(data.get("role") or "")).split())[:80],
         "relation": relation,
         "what": " ".join(str(data.get("what") or "").split())[:160],
     }
@@ -396,9 +398,13 @@ def identify(claim_text: str, matches: list[dict], context: str = "") -> dict:
     for name in list(model.get("names") or []) + [left, right] + frequency_names(matches, context):
         if name and _ok(name) and name not in names:
             names.append(name)
-    names = _drop_contained(names, counts)
-    names.sort(key=lambda name: (-counts.get(name, 0), name))
-    names = names[:4]
+    model_names = [n for n in (model.get("names") or []) if n and _ok(n)]
+    if model_names:
+        names = model_names[:4]
+    else:
+        names = _drop_contained(names, counts)
+        names.sort(key=lambda name: (-counts.get(name, 0), name))
+        names = names[:4]
     questions = split_questions(claim_text)
     kinds = {item["kind"] for item in questions}
     query = " ".join((claim_text or "").split())[:300]
