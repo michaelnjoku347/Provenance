@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import config, pipeline, samples, x402
@@ -133,9 +135,84 @@ def demo_image(demo_id: str):
     return FileResponse(sample["path"], media_type="image/jpeg")
 
 
+@app.get("/api/meta")
+def meta() -> dict:
+    from app.verdict import CREDIBLE, FACTCHECK
+
+    return {
+        "accepted": {
+            "formats": ["JPEG", "PNG", "WebP"],
+            "media_types": ["image/jpeg", "image/png", "image/webp"],
+            "max_bytes": MAX_BYTES,
+            "max_mb": 8,
+            "image_url": "Optional public http or https URL of the same image. Used only for reverse-image lookup.",
+            "claim": "Optional caption or claim that came with the post.",
+        },
+        "credible_domains": sorted(CREDIBLE),
+        "factcheck_domains": sorted(FACTCHECK),
+        "stages": [
+            {"id": "credentials", "label": "Read EXIF and C2PA"},
+            {"id": "detector", "label": "Weigh AI-image prior"},
+            {"id": "vision", "label": "Read the claim"},
+            {"id": "youcom_search", "label": "Search You.com"},
+            {"id": "youcom_contents", "label": "Read sources"},
+            {"id": "youcom_answer", "label": "Cited synthesis"},
+            {"id": "reverse_image", "label": "Reverse image"},
+            {"id": "verdict", "label": "Weigh the evidence"},
+        ],
+    }
+
+
 @app.post("/api/check")
 async def check(request: Request) -> dict:
     return _run(await _payload(request))
+
+
+@app.post("/api/check/stream")
+async def check_stream(request: Request):
+    payload = await _payload(request)
+
+    def events():
+        try:
+            for ev in pipeline.iter_request(payload):
+                yield f"event: {ev['event']}\ndata: {json.dumps(ev['data'], default=str)}\n\n"
+        except ValueError as exc:
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/feedback")
+async def feedback(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Send a JSON object.") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object.")
+    receipt_id = str(body.get("receipt_id") or "").strip()[:32]
+    if not receipt_id:
+        raise HTTPException(status_code=400, detail="receipt_id is required.")
+    record = {
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "receipt_id": receipt_id,
+        "verdict": str(body.get("verdict") or "")[:80],
+        "expected": str(body.get("expected") or "")[:80],
+        "reason": str(body.get("reason") or "disagree")[:120],
+        "note": str(body.get("note") or "")[:1000],
+    }
+    path = config.cache_dir() / "feedback.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+    return {"ok": True, "stored": "file", "path": "feedback.jsonl"}
 
 
 @app.get("/api/x402/listing")
@@ -165,9 +242,41 @@ async def x402_check(request: Request):
     return result
 
 
+WEB_DIST = config.ROOT / "web" / "dist"
+
+
+def _web_file(*names: str):
+    for name in names:
+        path = WEB_DIST / name
+        if path.is_file():
+            return path
+    return None
+
+
 @app.get("/")
 def home():
+    index = _web_file("index.html")
+    if index is not None:
+        return FileResponse(index)
     return FileResponse(config.STATIC_DIR / "index.html")
 
 
+@app.get("/favicon.svg")
+def favicon():
+    path = _web_file("favicon.svg")
+    if path is None:
+        raise HTTPException(status_code=404, detail="No favicon.")
+    return FileResponse(path, media_type="image/svg+xml")
+
+
+@app.get("/logo.svg")
+def logo():
+    path = _web_file("logo.svg")
+    if path is None:
+        raise HTTPException(status_code=404, detail="No logo.")
+    return FileResponse(path, media_type="image/svg+xml")
+
+
+if (WEB_DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")

@@ -234,3 +234,102 @@ def test_bad_requests(client):
     assert client.post("/api/check", json={}).status_code == 400
     assert client.post("/api/check", json={"demo_id": "nope"}).status_code == 400
     assert client.post("/api/check", json={"image_base64": "!!!!"}).status_code == 400
+
+
+def test_old_exif_beats_generic_topical_news(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if url.endswith("/v1/search"):
+            return 200, {
+                "results": {
+                    "web": [
+                        {
+                            "url": "https://apnews.com/article/georgia-flooding",
+                            "title": "Storms cause flooding in Tennessee and Georgia",
+                            "page_age": "2026-11-14T12:00:00",
+                            "contents": {
+                                "highlights": ["Severe flooding downtown after heavy rain."]
+                            },
+                        },
+                        {
+                            "url": "https://www.reuters.com/world/floods",
+                            "title": "Flooding downtown after storms",
+                            "page_age": "2026-11-14T13:00:00",
+                            "contents": {
+                                "highlights": ["Downtown flooding was reported this morning."]
+                            },
+                        },
+                    ]
+                }
+            }
+        if url.endswith("/v1/contents"):
+            return 200, {"results": []}
+        if url.endswith("/v1/answer"):
+            return 200, {
+                "answer": "Multiple outlets are reporting flooding downtown this morning.",
+                "citations": [],
+            }
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    body = client.post("/api/check", json={"demo_id": "archive"}).json()
+    assert body["verdict"] == "Out of Context"
+    titles = [item["title"] for item in body["contributions"]]
+    assert "Capture date contradicts the claim" in titles
+    assert "Topical news not counted as confirmation" in titles
+    assert all(item["points"] != 40 or item["bucket"] != "real" for item in body["contributions"])
+
+
+def test_meta_lists_accepted_types_and_domains(client):
+    body = client.get("/api/meta").json()
+    assert body["accepted"]["formats"] == ["JPEG", "PNG", "WebP"]
+    assert body["accepted"]["max_mb"] == 8
+    assert "reuters.com" in body["credible_domains"]
+    assert "snopes.com" in body["factcheck_domains"]
+
+
+def test_check_stream_emits_stages_and_result(client):
+    with client.stream("POST", "/api/check/stream", json={"demo_id": "archive"}) as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        raw = b"".join(response.iter_bytes()).decode("utf-8")
+    assert "event: stage" in raw
+    assert "event: result" in raw
+    assert "Out of Context" in raw
+    assert "Reading the file" in raw or "Read EXIF" in raw
+
+
+def test_receipt_explains_limits_and_next_steps(client):
+    body = client.post("/api/check", json={"demo_id": "archive"}).json()
+    assert body["verdict"] == "Out of Context"
+    assert "image itself wasn't read" in body["confidence_note"]
+    assert any(note["id"] == "no_vision" for note in body["caveats"])
+    groups = body["evidence_groups"]
+    assert any(item["title"] == "Capture date contradicts the claim" for item in groups["toward_fake_or_ooc"])
+    assert any(item["title"] == "Reverse image search" for item in groups["couldnt_check"])
+    titles = [step["title"] for step in body["next_steps"]]
+    assert "Run a reverse image search" in titles
+    assert "Compare the dates" in titles
+
+
+def test_feedback_is_recorded(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROVENANCE_CACHE_DIR", str(tmp_path / "cache"))
+    from app import config
+
+    body = client.post("/api/check", json={"demo_id": "synthetic"}).json()
+    response = client.post(
+        "/api/feedback",
+        json={
+            "receipt_id": body["receipt_id"],
+            "verdict": body["verdict"],
+            "reason": "disagree",
+            "expected": "Likely Real",
+            "note": "This looks like a real photo to me.",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    lines = (config.cache_dir() / "feedback.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert "This looks like a real photo to me." in lines[0]

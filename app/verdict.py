@@ -165,30 +165,66 @@ def decide(
     exif = credentials.get("exif") or {}
     c2pa = credentials.get("c2pa") or {}
     real = fake = ooc = 0
+    contributions: list[dict] = []
+
+    def _add(bucket: str, points: int, title: str, detail: str, url: str = "") -> None:
+        nonlocal real, fake, ooc
+        if bucket == "real":
+            real += points
+        elif bucket == "fake":
+            fake += points
+        else:
+            ooc += points
+        contributions.append(
+            {
+                "bucket": bucket,
+                "points": points,
+                "title": title,
+                "detail": detail[:320],
+                "url": url,
+            }
+        )
 
     if c2pa.get("generative"):
-        fake += 45
+        _add("fake", 45, "Generative C2PA marker", "The file has a C2PA marker that names a generative tool.")
     elif credentials.get("software_generative"):
-        fake += 38
+        _add(
+            "fake",
+            38,
+            "Generative software tag",
+            f"EXIF Software is {exif.get('software') or 'a generative tool'}.",
+        )
     elif c2pa.get("present") and c2pa.get("camera"):
-        real += 22
+        _add("real", 22, "Camera content credentials", "A C2PA manifest names a camera, not a generative tool.")
 
     if exif.get("make") and exif.get("model"):
-        real += 8
+        _add("real", 8, "Camera make and model", f"{exif.get('make')} {exif.get('model')}.".replace("  ", " "))
     elif exif.get("make"):
-        real += 5
+        _add("real", 5, "Camera make", f"EXIF make is {exif.get('make')}.")
     if exif.get("datetime"):
-        real += 4
+        _add("real", 4, "File timestamp", f"EXIF records {exif.get('datetime')}.")
 
     captured = _parse_when(exif.get("datetime") or "")
     date_conflict = False
+    strong_date_conflict = False
     if captured and _recent_claim(text):
         age_days = (now.date() - captured.date()).days
         if age_days > 30:
-            ooc += 36
+            _add(
+                "out_of_context",
+                40,
+                "Capture date contradicts the claim",
+                f"The file is dated {captured.strftime('%Y-%m-%d')}, but the claim describes something happening now.",
+            )
             date_conflict = True
+            strong_date_conflict = True
         elif age_days > 2:
-            ooc += 16
+            _add(
+                "out_of_context",
+                16,
+                "Capture date looks stale",
+                f"The file is dated {captured.strftime('%Y-%m-%d')}, which is older than the claim's timeframe.",
+            )
             date_conflict = True
 
     hits = list((web.get("search") or {}).get("hits") or [])
@@ -223,35 +259,72 @@ def decide(
             support_hits.append(hit)
 
     if fake_hits:
-        fake += 28 + min(12, 6 * (len(fake_hits) - 1))
+        pts = 28 + min(12, 6 * (len(fake_hits) - 1))
+        hit = fake_hits[0]
+        _add("fake", pts, "Coverage calls it false", hit.get("excerpt") or hit.get("title") or "A source describes the image as generated or false.", hit.get("url") or "")
     if ooc_hits:
-        ooc += 28 + min(12, 6 * (len(ooc_hits) - 1))
-    if len(support_hits) >= 2:
-        real += 40
-    elif len(support_hits) == 1:
-        real += 18
+        pts = 28 + min(12, 6 * (len(ooc_hits) - 1))
+        hit = ooc_hits[0]
+        _add("out_of_context", pts, "Coverage says it is miscaptioned", hit.get("excerpt") or hit.get("title") or "A source describes this as older or out of context.", hit.get("url") or "")
+    # Generic topical news does not confirm that this specific image was taken
+    # when the file's capture date already contradicts the claim's timeframe.
+    if strong_date_conflict and support_hits:
+        contributions.append(
+            {
+                "bucket": "real",
+                "points": 0,
+                "title": "Topical news not counted as confirmation",
+                "detail": "Credible outlets are covering a similar topic, but that does not prove this file was taken when the claim says.",
+                "url": support_hits[0].get("url") or "",
+            }
+        )
+    elif not strong_date_conflict:
+        if len(support_hits) >= 2:
+            top = support_hits[0]
+            _add("real", 40, "Multiple credible sources", f"{len(support_hits)} credible outlets report the claim. {top.get('title') or ''}", top.get("url") or "")
+        elif len(support_hits) == 1:
+            top = support_hits[0]
+            _add("real", 18, "One credible source", top.get("title") or "A credible outlet reports the claim.", top.get("url") or "")
 
     answer_text = (web.get("answer") or {}).get("text") or ""
     answer_tone = _tone(answer_text)
     if answer_tone == "fake":
-        fake += 12
+        _add("fake", 12, "Cited synthesis flags a fake", answer_text[:240])
     elif answer_tone == "ooc":
-        ooc += 12
-    elif answer_text and "reporting" in answer_text.lower() and support_hits:
-        real += 6
+        _add("out_of_context", 12, "Cited synthesis flags a mismatch", answer_text[:240])
+    elif (
+        answer_text
+        and "reporting" in answer_text.lower()
+        and support_hits
+        and not strong_date_conflict
+    ):
+        _add("real", 6, "Cited synthesis agrees", "The You.com answer says credible reporting supports the claim.")
 
     detector_score = float(detector.get("score") or 0)
     if detector_score >= 0.75:
-        fake += 12
+        _add("fake", 12, "AI-image prior is high", f"Local prior score {detector_score:.2f}. Counted as one clue, not a lab detector.")
     elif detector_score <= 0.25 and exif.get("make"):
-        real += 4
+        _add("real", 4, "AI-image prior is low", f"Local prior score {detector_score:.2f}, and the file has camera metadata.")
 
     for match in reverse.get("matches") or []:
         seen = _parse_when(match.get("date") or "")
         if seen and _recent_claim(text) and (now.date() - seen.date()).days > 30:
-            ooc += 20
+            _add("out_of_context", 20, "Reverse image first seen earlier", f"A similar image appears dated {seen.strftime('%Y-%m-%d')}.", match.get("url") or "")
             date_conflict = True
             break
+
+    # A strong capture-date conflict beats generic corroboration, unless the
+    # file itself is clearly generative (C2PA / software tag / high fake score).
+    if strong_date_conflict and fake < 38:
+        target = max(ooc, real + 16, fake + 16)
+        extra = target - ooc
+        if extra:
+            _add(
+                "out_of_context",
+                extra,
+                "Date conflict outweighs topical news",
+                "An old file date plus a now-claim is not rescued by generic coverage of the same topic.",
+            )
 
     scores = {"real": real, "fake": fake, "out_of_context": ooc}
     ranked = sorted(
@@ -262,7 +335,9 @@ def decide(
     top_label, top_score = ranked[0]
     second_score = ranked[1][1]
     contested = top_score >= 25 and (top_score - second_score) < 8
-    if top_score < 25 or contested:
+    if strong_date_conflict and fake < 38:
+        verdict = "Out of Context"
+    elif top_score < 25 or contested:
         verdict = "Unverified"
     else:
         verdict = top_label
@@ -286,6 +361,7 @@ def decide(
         reverse,
         detector,
         date_conflict,
+        strong_date_conflict,
         captured,
         support_hits,
         fake_hits,
@@ -299,6 +375,7 @@ def decide(
         "confidence": confidence,
         "summary": SUMMARIES[verdict],
         "scores": scores,
+        "contributions": contributions,
         "clues": clues[:4],
         "sources": sources[:8],
         "timeline": timeline[:8],
@@ -312,6 +389,7 @@ def _build_clues(
     reverse,
     detector,
     date_conflict,
+    strong_date_conflict,
     captured,
     support_hits,
     fake_hits,
@@ -381,7 +459,18 @@ def _build_clues(
         )
 
     search_status = (web.get("search") or {}).get("status")
-    if support_hits:
+    if support_hits and strong_date_conflict:
+        top = support_hits[0]
+        clues.append(
+            _clue(
+                "News is topical, not this photo",
+                "Credible outlets are covering a similar topic, but that does not confirm this file was taken when the claim says.",
+                "supporting",
+                url=top.get("url") or "",
+                source="youcom",
+            )
+        )
+    elif support_hits:
         top = support_hits[0]
         clues.append(
             _clue(

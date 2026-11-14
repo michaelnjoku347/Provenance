@@ -216,7 +216,7 @@ def _merge_pages(hits: list[dict], pages: list[dict]) -> None:
             hit["title"] = page["title"]
 
 
-def investigate(query: str) -> dict:
+def iter_investigate(query: str):
     empty_search = {"status": "skipped", "detail": "", "hits": [], "knowledge": ""}
     empty_contents = {"status": "skipped", "detail": "", "pages": []}
     empty_answer = {"status": "skipped", "detail": "", "text": "", "citations": [], "kind": "answer"}
@@ -225,19 +225,26 @@ def investigate(query: str) -> dict:
         empty_search["detail"] = detail
         empty_contents["detail"] = detail
         empty_answer["detail"] = detail
-        return {"search": empty_search, "contents": empty_contents, "answer": empty_answer}
+        yield "search", empty_search
+        yield "contents", empty_contents
+        yield "answer", empty_answer
+        return
     query = (query or "").strip()
     if not query:
         detail = "No claim to search."
         empty_search["detail"] = detail
         empty_contents["detail"] = detail
         empty_answer["detail"] = detail
-        return {"search": empty_search, "contents": empty_contents, "answer": empty_answer}
+        yield "search", empty_search
+        yield "contents", empty_contents
+        yield "answer", empty_answer
+        return
 
     try:
         search = _search(query)
     except Exception:
         search = {"status": "error", "detail": "You.com search failed.", "hits": [], "knowledge": ""}
+    yield "search", search
 
     urls = []
     for hit in search.get("hits") or []:
@@ -255,4 +262,12 @@ def investigate(query: str) -> dict:
         answer = {"status": "error", "detail": "You.com synthesis failed.", "text": "", "citations": [], "kind": "answer"}
 
     _merge_pages(search.get("hits") or [], contents.get("pages") or [])
-    return {"search": search, "contents": contents, "answer": answer}
+    yield "contents", contents
+    yield "answer", answer
+
+
+def investigate(query: str) -> dict:
+    web = {}
+    for name, data in iter_investigate(query):
+        web[name] = data
+    return web
