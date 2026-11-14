@@ -226,6 +226,56 @@ def _research(prompt: str) -> dict:
     }
 
 
+def judge_stance(claim: str, hits: list | None) -> dict:
+    """Strict JSON stance from the sources already retrieved. Empty dict means use the keyword fallback.
+
+    The Answer query stays under 400 characters. A long source list uses Research lite instead.
+    This does not record a sponsor call, and it never raises.
+    """
+    claim = " ".join((claim or "").split())
+    if not config.key("YDC_API_KEY") or not claim:
+        return {}
+    urls = " ".join(str(hit.get("url") or "") for hit in (hits or [])[:4] if str(hit.get("url") or "").startswith("http"))
+    packed = _clip_query(
+        "Judge the claim from these sources only. "
+        'Return JSON {"stance":"supports|contradicts|mixed|insufficient","answer":"one sentence",'
+        '"evidence":[{"url":"","quote":"","stance":"supports|contradicts|mixed|insufficient"}]}. '
+        f"Claim: {claim[:140]}. Sources: {urls}",
+        380,
+    )
+    try:
+        status, body = httputil.post_json(ANSWER_URL, _headers(), {"query": packed}, timeout=25)
+    except Exception:
+        return {}
+    if status != 200 or not isinstance(body, dict):
+        return {}
+    text = str(body.get("answer") or "")
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    try:
+        data = json.loads(text[start : end + 1])
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    stance = str(data.get("stance") or "").strip().lower()
+    if stance not in {"supports", "contradicts", "mixed", "insufficient"}:
+        return {}
+    evidence = []
+    for item in data.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        item_stance = str(item.get("stance") or stance).strip().lower()
+        if item_stance not in {"supports", "contradicts", "mixed", "insufficient"}:
+            item_stance = stance
+        if url.startswith("http"):
+            evidence.append({"url": url, "quote": str(item.get("quote") or "")[:240], "stance": item_stance})
+    return {"stance": stance, "answer": " ".join(str(data.get("answer") or "").split())[:400], "evidence": evidence}
+
+
 def ask(prompt: str) -> dict:
     """Name who is shown. Research lite, because the titles do not fit in Answer."""
     if not config.key("YDC_API_KEY") or not (prompt or "").strip():

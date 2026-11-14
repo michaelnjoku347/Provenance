@@ -511,6 +511,7 @@ def _top_sources(hits: list[dict]) -> list[dict]:
                 "quote": _quote(hit),
                 "credible": is_credible(url),
                 "found_by": hit.get("found_by") or "",
+                "stance": hit.get("stance") or "",
             }
         )
         if len(rows) == 3:
@@ -612,7 +613,13 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
             and _about(hit, names)
             and any(word in blob_of(hit).lower() for word in _DIVORCE)
         ]
-        if "relationship" in kinds and confirmed:
+        judged = str(((decision or {}).get("claim") or {}).get("stance") or "")
+        if "relationship" in kinds and judged in {"supports", "contradicts", "mixed", "insufficient"}:
+            sentence = (decision.get("summary") or who_sentence).strip()
+            verdict = decision.get("verdict") or UNVERIFIED
+            line = ""
+            confidence = int(decision.get("confidence") or 40)
+        elif "relationship" in kinds and confirmed:
             sentence = f"{who_sentence} A credible source reports they divorced."
             verdict = "True"
             line = "Credible reporting says they divorced."
@@ -630,9 +637,9 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
             confidence = 64
         elif "relationship" in kinds:
             sentence = f"{who_sentence} There are no credible reports they are divorced."
-            verdict = FALSE
-            line = "No credible evidence they are divorced. Unverified/likely false."
-            confidence = 70
+            verdict = UNVERIFIED
+            line = "No credible evidence they are divorced. Unverified."
+            confidence = 40
             if rumors and len(why) < 3:
                 why.append(
                     {
@@ -703,9 +710,23 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
         )
         if lead:
             sentence = lead
+    from app.verdict import confidence_from_evidence
+
+    stance_for_score = {
+        TRUE: "supports",
+        "Answered": "supports",
+        FALSE: "contradicts",
+        "Misleading or Out of Context": "mixed",
+        UNVERIFIED: "insufficient",
+    }.get(verdict, "insufficient")
+    confidence, confidence_reasons = confidence_from_evidence(hits, stance_for_score, claim_text)
+    if isinstance(decision, dict):
+        decision["confidence_reasons"] = confidence_reasons
+        decision["confidence"] = confidence
     return {
         "verdict": verdict,
         "confidence": confidence,
+        "confidence_reasons": confidence_reasons,
         "text": sentence,
         "line": line,
         "why": why[:3],
