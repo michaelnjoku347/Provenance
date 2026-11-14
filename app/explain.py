@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from urllib.parse import quote, urlparse
 
-from app.verdict import host_of
+from app.links import is_direct_image, is_status_url
+from app.verdict import FALSE, MISLEADING, TRUE, host_of
 
 
 def _stage(stages: dict, name: str) -> dict:
@@ -23,7 +24,7 @@ def caveats(result: dict) -> list[dict]:
         notes.append(
             {
                 "id": "no_vision",
-                "text": "No vision model was used, so the image itself wasn't read. The check ran on the caption, the file metadata, and what turned up on the web.",
+                "text": "No vision model was used, so the image itself wasn't read. This check is about the claim: the words, the dates, and what credible sources say.",
             }
         )
 
@@ -81,18 +82,25 @@ def caveats(result: dict) -> list[dict]:
                 "text": "The clues are thin or they pull in more than one direction, so this could easily be wrong.",
             }
         )
-    elif verdict == "Likely Real":
+    elif verdict == TRUE:
         notes.append(
             {
                 "id": "news_is_not_the_photo",
-                "text": "Matching news coverage does not prove this file is the original photograph of that event.",
+                "text": "Matching coverage supports the claim. It still does not prove a particular file is the original photograph of that event.",
             }
         )
-    elif verdict == "Likely AI or Fake":
+    elif verdict == FALSE:
         notes.append(
             {
-                "id": "markers_can_be_missing",
-                "text": "A software tag or model prior can be missing or forged, so a generated image can still slip through, and a real photo can be flagged.",
+                "id": "sources_can_miss",
+                "text": "A source can be wrong, or about a different event than the one in the claim.",
+            }
+        )
+    elif verdict == MISLEADING:
+        notes.append(
+            {
+                "id": "context_is_not_pixels",
+                "text": "A date or context mismatch means the claim's timing or story is off. It does not mean the picture was generated.",
             }
         )
 
@@ -101,7 +109,7 @@ def caveats(result: dict) -> list[dict]:
         notes.append(
             {
                 "id": "detector_is_a_prior",
-                "text": "The AI-image score is a local prior, not a lab detector. Treat it as one clue among others.",
+                "text": "Any AI-image score is a weak local prior, not a verdict. This desk checks whether the claim is true.",
             }
         )
 
@@ -135,6 +143,8 @@ def evidence_groups(result: dict) -> dict:
         }
         if row["bucket"] == "real":
             toward_real.append(row)
+        elif row["bucket"] == "weak":
+            continue
         else:
             toward_other.append(row)
 
@@ -188,9 +198,23 @@ def evidence_groups(result: dict) -> dict:
                 "bucket": "skipped",
             }
         )
+    weak = []
+    for item in result.get("contributions") or []:
+        if (item.get("bucket") or "") != "weak":
+            continue
+        weak.append(
+            {
+                "title": item.get("title") or "",
+                "why": item.get("detail") or "",
+                "points": int(item.get("points") or 0),
+                "bucket": "weak",
+                "url": item.get("url") or "",
+            }
+        )
     return {
         "toward_real": toward_real,
         "toward_fake_or_ooc": toward_other,
+        "weak_clues": weak,
         "couldnt_check": couldnt,
     }
 
@@ -198,7 +222,16 @@ def evidence_groups(result: dict) -> dict:
 def next_steps(result: dict, image_url: str = "") -> list[dict]:
     steps: list[dict] = []
     image_url = (image_url or "").strip()
-    if image_url.startswith("http"):
+    if is_status_url(image_url):
+        steps.append(
+            {
+                "id": "open_post",
+                "title": "Open the post",
+                "why": "Read the X post itself and check the author, the date, and whether the text matches what is circulating now.",
+                "links": [{"label": "Open on X", "url": image_url}],
+            }
+        )
+    if image_url.startswith("http") and is_direct_image(image_url):
         encoded = quote(image_url, safe="")
         steps.append(
             {

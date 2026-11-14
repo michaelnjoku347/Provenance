@@ -1,8 +1,8 @@
 # Provenance
 
-A newsroom desk that checks a viral image by the story around it, then shows the receipts.
+A newsroom desk that checks whether a claim is true, then shows the receipts.
 
-Pixel-only detectors miss the expensive failure: a real photo from 2011 posted as this morning's flood, or a generated picture wearing a breaking-news caption. Provenance reads the claim, the file's own credentials, and what credible outlets are publishing right now. The verdict is one of **Likely Real**, **Likely AI or Fake**, **Out of Context**, or **Unverified**, with a confidence score, three or four clues, a first-seen timeline, and source links.
+Provenance is a claim checker, not an AI-image detector. You give it a claim — plain text, an X post, an article link, or a claim attached to an image or file — and it asks what credible sources say. The verdict is one of **True**, **Misleading or Out of Context**, **False**, or **Unverified**. An AI-image signal can appear on the receipt only as a weak clue. It never decides the claim.
 
 ## Who it's for
 
@@ -11,22 +11,22 @@ Primary customer: a social or homepage editor who has a few minutes to repost or
 ## How a check works
 
 ```text
-image + optional caption
+claim, or an X post, or an article link
+        + optional image or file
         |
-        +-- vision model (OpenAI or Gemini) --> who / what / where / when
-        +-- EXIF + C2PA marker scan
-        +-- local AI-image prior (one weak clue)
+        +-- X oEmbed (no key) for status text, author, date, and image
+        +-- article title and text (You.com Contents when a key is set)
+        +-- You.com Search --+--> Contents API (top sources)
+        |                    +--> Answer API, or Research API if YDC_USE_RESEARCH=1
+        +-- file date and post date, compared with "this morning" style claims
+        +-- reverse image only when a public image URL is available
         |
-        +-- You.com Search (highlights) --+--> Contents API (top sources)
-        |                                 +--> Answer API, or Research API if YDC_USE_RESEARCH=1
-        +-- Treg reverse image (optional, public URL only)
-        |
-        +-- verdict, clues, timeline, clickable sources
+        +-- verdict about the claim, sources, timeline
         |
         +-- cache/<sha>.json so the same check does not spend credits again
 ```
 
-The AI-image score cannot carry a verdict by itself. A file dated 2011 with a "this morning" caption can be Out of Context with no web key at all. Calling an image Likely Real needs corroboration, which is why the live web step is the product.
+A file dated 2011 with a "this morning" claim is **Misleading or Out of Context** with no web key at all. Calling a claim **True** needs corroboration from credible sources. A generative software tag is recorded as a weak clue and cannot by itself make the claim **False**.
 
 ## Sponsors on this build
 
@@ -49,11 +49,13 @@ uvicorn app.main:app --port 8000
 
 Open http://127.0.0.1:8000 and click the three samples:
 
-1. **City hall, this morning** — camera-style file, same-day claim. Stays **Unverified** until You.com can see reporting.
-2. **Relief-bill photograph** — software tag says Stable Diffusion XL. **Likely AI or Fake**.
-3. **Flooding, claimed as this morning** — file date is 2011. **Out of Context**.
+1. **City hall, this morning** — a same-day claim. Stays **Unverified** until You.com can see reporting, then **True** when credible sources agree.
+2. **Relief-bill claim** — the file names a generative tool. That is only a weak clue, so without sources the claim stays **Unverified**.
+3. **Flooding, claimed as this morning** — the file date is 2011. **Misleading or Out of Context**.
 
-Put `YDC_API_KEY` in `.env` and restart. The same desk then searches the live web and lists source links. Vision needs `OPENAI_API_KEY` or `GEMINI_API_KEY`. Reverse image needs `TREG_API_KEY` plus a public image URL.
+You can also paste an `x.com` or `twitter.com` status URL, or an article URL, with no image. The post text becomes the claim, and the post date is used when the claim says something is happening now.
+
+Put `YDC_API_KEY` in `.env` and restart. The same desk then searches the live web and lists source links. Article pages are read with You.com Contents when that key is set. Vision needs `OPENAI_API_KEY` or `GEMINI_API_KEY`. Reverse image needs `TREG_API_KEY` plus a public image URL.
 
 Interactive API reference: http://127.0.0.1:8000/docs
 
@@ -91,9 +93,9 @@ A receipt looks like this (fields trimmed):
 
 ```json
 {
-  "verdict": "Out of Context",
+  "verdict": "Misleading or Out of Context",
   "confidence": 67,
-  "summary": "The picture may be real, but it does not match the time or the story in the claim.",
+  "summary": "The claim does not match the date or the context of the evidence.",
   "claim": {"text": "This photo was taken this morning of flooding downtown.", "source": "caption"},
   "clues": [{"title": "Capture time vs claim", "detail": "The file date is 2011-03-11...", "weight": "strong", "url": ""}],
   "timeline": [{"at": "2011-03-11T14:46:23", "label": "File timestamp (EXIF)", "url": ""}],

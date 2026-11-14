@@ -18,7 +18,7 @@ MANIFEST = [
         "id": "wire",
         "file": "wire.jpg",
         "title": "City hall, this morning",
-        "blurb": "Camera-style file and a same-day claim. Without a You.com key this stays unverified.",
+        "blurb": "A same-day claim about a crowd. Without sources this stays Unverified.",
         "claim": "A crowd gathered outside city hall this morning after a surprise transit announcement.",
         "exif": {
             MAKE: "Canon",
@@ -30,8 +30,8 @@ MANIFEST = [
     {
         "id": "synthetic",
         "file": "synthetic.jpg",
-        "title": "Relief-bill photograph",
-        "blurb": "The software tag names a generative model. The claim says the photo is breaking news.",
+        "title": "Relief-bill claim",
+        "blurb": "The file names a generative tool, which is only a weak clue. Without sources the claim stays Unverified.",
         "claim": "Breaking: this photograph shows the president signing the relief bill an hour ago.",
         "exif": {
             SOFTWARE: "Stable Diffusion XL",
@@ -41,7 +41,7 @@ MANIFEST = [
         "id": "archive",
         "file": "archive.jpg",
         "title": "Flooding, claimed as this morning",
-        "blurb": "The file date is 2011. The caption says the picture was taken this morning.",
+        "blurb": "The file date is 2011 and the claim says this morning, so the claim is misleading.",
         "claim": "This photo was taken this morning of flooding downtown.",
         "exif": {
             MAKE: "Nikon",

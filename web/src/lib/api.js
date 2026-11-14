@@ -1,12 +1,12 @@
 export const STAGE_FALLBACK = [
   { id: 'credentials', label: 'Read EXIF and C2PA' },
-  { id: 'detector', label: 'Weigh AI-image prior' },
+  { id: 'detector', label: 'Note a weak AI-image prior' },
   { id: 'vision', label: 'Read the claim' },
   { id: 'youcom_search', label: 'Search You.com' },
   { id: 'youcom_contents', label: 'Read sources' },
   { id: 'youcom_answer', label: 'Cited synthesis' },
   { id: 'reverse_image', label: 'Reverse image' },
-  { id: 'verdict', label: 'Weigh the evidence' },
+  { id: 'verdict', label: 'Judge the claim' },
 ]
 
 function parseEvent(block) {

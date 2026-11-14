@@ -32,9 +32,9 @@ function escapeHtml(value) {
 }
 
 function klassFor(verdict) {
-  if (verdict === "Likely Real") return "v-real";
-  if (verdict === "Likely AI or Fake") return "v-fake";
-  if (verdict === "Out of Context") return "v-ooc";
+  if (verdict === "True" || verdict === "Likely Real") return "v-real";
+  if (verdict === "False" || verdict === "Likely AI or Fake") return "v-fake";
+  if (verdict === "Misleading or Out of Context" || verdict === "Out of Context") return "v-ooc";
   return "v-unverified";
 }
 

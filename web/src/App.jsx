@@ -18,24 +18,24 @@ import { runCheck, STAGE_FALLBACK } from './lib/api.js'
 import { cn } from './lib/cn.js'
 
 const VERDICTS = {
-  'Likely Real': { color: '#C8F54A', soft: 'rgba(200,245,74,0.12)', label: 'Likely Real' },
-  'Likely AI or Fake': { color: '#FF5C7A', soft: 'rgba(255,92,122,0.12)', label: 'Likely AI or Fake' },
-  'Out of Context': { color: '#FFB020', soft: 'rgba(255,176,32,0.12)', label: 'Out of Context' },
+  True: { color: '#C8F54A', soft: 'rgba(200,245,74,0.12)', label: 'True' },
+  False: { color: '#FF5C7A', soft: 'rgba(255,92,122,0.12)', label: 'False' },
+  'Misleading or Out of Context': { color: '#FFB020', soft: 'rgba(255,176,32,0.12)', label: 'Misleading or Out of Context' },
   Unverified: { color: '#8B97A6', soft: 'rgba(139,151,166,0.12)', label: 'Unverified' },
 }
 
 const STAMPS = {
-  'Likely Real': ['REAL'],
-  'Likely AI or Fake': ['AI-MADE'],
-  'Out of Context': ['OUT OF', 'CONTEXT'],
+  True: ['TRUE'],
+  False: ['FALSE'],
+  'Misleading or Out of Context': ['MISLEADING'],
   Unverified: ['UNVERIFIED'],
 }
 
 const HOW = [
-  ['01', 'Read the file', 'EXIF and C2PA'],
-  ['02', 'Search the web', 'You.com sources'],
-  ['03', 'Score each clue', 'For, against, missed'],
-  ['04', 'Stamp a receipt', 'Verdict and limits'],
+  ['01', 'Take the claim', 'Text, post, or page'],
+  ['02', 'Search sources', 'You.com receipts'],
+  ['03', 'Check the dates', 'Post, file, context'],
+  ['04', 'Stamp a receipt', 'True, false, or open'],
 ]
 
 const STATUS_LABEL = {
@@ -228,8 +228,10 @@ export default function App() {
       if (!body.image_url) body.image_url = imageUrl
     } else {
       const chosen = file
-      if (!chosen && !body.image_base64) {
-        setError('Drop a viral image, or pick one of the demos.')
+      const typedClaim = (body.claim || claim || '').trim()
+      const typedUrl = (body.image_url || imageUrl || '').trim()
+      if (!chosen && !body.image_base64 && !typedClaim && !typedUrl) {
+        setError('Add a claim, a link, an image, or a file.')
         return
       }
       if (chosen && !body.image_base64) {
@@ -271,6 +273,7 @@ export default function App() {
               flags: stage.flags || [],
             }
             if (index >= 0) next[index] = row
+            else if (row.id === 'link') next.unshift(row)
             else next.push(row)
             return next
           })
@@ -279,6 +282,7 @@ export default function App() {
           setResult(payload)
           setBusy(false)
           if (payload.preview_url) setPreview(payload.preview_url)
+          else if (!preview && payload.link?.image_url) setPreview(payload.link.image_url)
           remember(payload)
           requestAnimationFrame(() => stageRef.current?.scrollTo({ top: 0, behavior: 'smooth' }))
         },
@@ -383,10 +387,10 @@ export default function App() {
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(320px,392px)_minmax(0,1fr)]">
         <aside className="intake flex min-h-0 flex-col gap-2.5 overflow-y-auto border-line px-3 py-3 sm:px-3.5 lg:border-r">
           <div>
-            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-lime">Image check</p>
-            <h1 className="mt-1 font-serif text-[1.85rem] leading-none tracking-tight">Drop a viral image</h1>
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-lime">Claim check</p>
+            <h1 className="mt-1 font-serif text-[1.85rem] leading-none tracking-tight">Check a claim</h1>
             <p className="mt-1.5 text-[13px] leading-5 text-mist">
-              Real, AI-made, or out of context — with the clues that led there. The checker can be wrong. The receipt is yours to judge.
+              Paste the claim, or an X post or article link. An image or file is optional. The receipt shows which sources confirm or contradict it.
             </p>
           </div>
 
@@ -394,71 +398,65 @@ export default function App() {
             <DemoTray demos={demos} demoId={demoId} onChoose={chooseDemo} layout="strip" />
           </div>
 
-          <label
-            onDragOver={(e) => {
-              e.preventDefault()
-              setDrag(true)
-            }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={(e) => {
-              e.preventDefault()
-              setDrag(false)
-              onPickFile(e.dataTransfer.files?.[0])
-            }}
-            className={cn(
-              'group relative flex cursor-pointer overflow-hidden rounded-2xl border border-dashed bg-[#10161d] text-left transition',
-              drag ? 'border-lime bg-lime/5' : 'border-line hover:border-lime/35',
-              currentPreview ? 'min-h-0 items-center gap-3 p-2' : 'min-h-[92px] flex-col items-center justify-center px-4 py-3 text-center',
-            )}
-          >
-            {currentPreview ? (
-              <>
-                <img src={currentPreview} alt="" className="h-14 w-[4.75rem] shrink-0 rounded-lg object-cover" />
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium">{file?.name || selectedDemo?.title || 'Image on the desk'}</span>
-                  <span className="mt-0.5 block text-xs text-mist">Click or drop to replace. Up to 8 MB.</span>
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="flex h-9 w-9 items-center justify-center rounded-full border border-line bg-panel-2">
-                  <ImagePlus className="h-4 w-4 text-lime" />
-                </span>
-                <span className="mt-2 block text-sm font-medium">Drop a JPEG, PNG, or WebP</span>
-                <span className="mt-0.5 block text-xs text-mist">Up to 8 MB. Click to browse.</span>
-              </>
-            )}
-            <input
-              ref={inputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-              className="hidden"
-              onChange={(e) => onPickFile(e.target.files?.[0])}
-            />
-          </label>
-
           <div className="space-y-2 rounded-2xl border border-line bg-[#10161d] p-2.5">
             <label className="block">
-              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Caption or claim</span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Claim</span>
               <textarea
                 value={claim}
                 onChange={(e) => setClaim(e.target.value)}
-                rows={2}
-                placeholder="What is this image being said to show?"
+                rows={3}
+                placeholder="What is being claimed? Leave this blank to use an X post or an article."
                 className="mt-1.5 w-full resize-none rounded-xl border border-line bg-ink px-3 py-2 text-sm leading-5 text-paper placeholder:text-mist/60 focus:border-lime/50"
               />
             </label>
             <label className="block">
-              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Public image link, optional</span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Link, optional</span>
               <div className="relative mt-1.5">
                 <Link2 className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-mist" />
                 <input
                   value={imageUrl}
                   onChange={(e) => setImageUrl(e.target.value)}
-                  placeholder="https://… used only for reverse image search"
+                  placeholder="x.com/…/status/… or an article URL"
                   className="w-full rounded-xl border border-line bg-ink py-2 pl-9 pr-3 text-sm text-paper placeholder:text-mist/60 focus:border-lime/50"
                 />
               </div>
+            </label>
+            <label
+              onDragOver={(e) => {
+                e.preventDefault()
+                setDrag(true)
+              }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDrag(false)
+                onPickFile(e.dataTransfer.files?.[0])
+              }}
+              className={cn(
+                'flex cursor-pointer items-center gap-3 rounded-xl border border-dashed p-2 text-left transition',
+                drag ? 'border-lime bg-lime/5' : 'border-line hover:border-lime/35',
+              )}
+            >
+              {currentPreview ? (
+                <img src={currentPreview} alt="" className="h-12 w-16 shrink-0 rounded-lg object-cover" />
+              ) : (
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-panel-2">
+                  <ImagePlus className="h-4 w-4 text-lime" />
+                </span>
+              )}
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">
+                  {file?.name || (currentPreview ? selectedDemo?.title || 'Image on the desk' : 'Image or file, optional')}
+                </span>
+                <span className="mt-0.5 block text-xs text-mist">JPEG, PNG, or WebP. Up to 8 MB.</span>
+              </span>
+              <input
+                ref={inputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                className="hidden"
+                onChange={(e) => onPickFile(e.target.files?.[0])}
+              />
             </label>
             <button
               type="button"
@@ -467,7 +465,7 @@ export default function App() {
               className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-lime px-4 py-2.5 text-sm font-semibold text-ink shadow-[0_0_24px_rgba(200,245,74,0.16)] transition hover:bg-lime/90 disabled:cursor-wait disabled:opacity-70"
             >
               {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-              {busy ? 'Checking…' : 'Check image'}
+              {busy ? 'Checking…' : 'Check claim'}
             </button>
           </div>
 
@@ -592,7 +590,7 @@ function DemoTray({ demos, demoId, onChoose, layout }) {
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <h2 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Case files</h2>
+        <h2 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Sample claims</h2>
         <span className="font-mono text-[10px] text-mist">{demos.length} samples</span>
       </div>
       <div className={cn(strip ? '-mx-1 flex gap-2 overflow-x-auto px-1 pb-1' : 'grid grid-cols-3 gap-2')}>
@@ -655,7 +653,7 @@ function StageIdle({ onHelp }) {
         <Logo className="h-14 w-14" />
         <h2 className="mt-4 px-6 text-center font-serif text-3xl tracking-tight sm:text-4xl">A receipt, not a black box</h2>
         <p className="mt-3 max-w-md px-6 text-center text-sm leading-6 text-mist">
-          The picture lands here. You will see each step as it happens, then how every clue scored — including the ones we could not run.
+          The claim lands here. You will see each source as it is found, then whether the dates match — including the checks we could not run.
         </p>
         <button type="button" onClick={onHelp} className="mt-4 text-sm text-lime hover:underline">
           What can I check?
@@ -663,10 +661,10 @@ function StageIdle({ onHelp }) {
       </div>
       <ol className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
         {[
-          ['01', 'The file is read for EXIF and C2PA.'],
-          ['02', 'You.com searches and opens sources.'],
-          ['03', 'Each clue is scored for or against the claim.'],
-          ['04', 'You get the verdict, the limits, and what to check next.'],
+          ['01', 'You give a claim, a post, a page, or a file.'],
+          ['02', 'You.com searches credible sources.'],
+          ['03', 'Dates and context are compared with the claim.'],
+          ['04', 'You get True, Misleading, False, or Unverified.'],
         ].map(([num, line]) => (
           <li key={num} className="rounded-xl border border-line bg-[#10161d] px-3 py-2.5">
             <div className="font-mono text-[10px] text-lime">{num}</div>
@@ -694,9 +692,9 @@ function ReadyStage({ src, title, claim }) {
       </div>
       <div className="flex items-end justify-between gap-4 border-t border-line px-4 py-3 sm:px-5">
         <div className="min-w-0">
-          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">On the desk</div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">Attached</div>
           <div className="truncate text-sm font-medium">{title}</div>
-          <p className="truncate text-xs text-mist">{claim || 'Add a caption, then check the image.'}</p>
+          <p className="truncate text-xs text-mist">{claim || 'Add the claim, or paste an X or article link.'}</p>
         </div>
         <div className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-mist">Ready</div>
       </div>
@@ -807,7 +805,7 @@ function Receipt({
   onFlag,
 }) {
   const theme = themeFor(result.verdict)
-  const groups = result.evidence_groups || { toward_real: [], toward_fake_or_ooc: [], couldnt_check: [] }
+  const groups = result.evidence_groups || { toward_real: [], toward_fake_or_ooc: [], weak_clues: [], couldnt_check: [] }
   const scores = result.scores || { real: 0, fake: 0, out_of_context: 0 }
   const total = Math.max(1, scores.real + scores.fake + scores.out_of_context)
 
@@ -841,9 +839,11 @@ function Receipt({
             <p className="mt-2 text-sm leading-6">{result.claim.text}</p>
           </section>
         ) : (
-          <section className="rounded-2xl border border-line bg-[#10161d] p-4 text-sm text-mist">No caption was attached to this check.</section>
+          <section className="rounded-2xl border border-line bg-[#10161d] p-4 text-sm text-mist">No claim was attached to this check.</section>
         )}
       </div>
+
+      {result.link?.kind ? <LinkCard link={result.link} /> : null}
 
       <section className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
         <h3 className="text-sm font-semibold">How this verdict was reached</h3>
@@ -858,14 +858,15 @@ function Receipt({
           <span className="text-amber">Out of context {scores.out_of_context}</span>
         </div>
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          <EvidenceBlock title="Points toward real" accent="text-lime" items={groups.toward_real} empty="Nothing scored toward real." />
+          <EvidenceBlock title="Supports the claim" accent="text-lime" items={groups.toward_real} empty="No source scored in support of the claim." />
           <EvidenceBlock
-            title="Points toward fake / out of context"
+            title="Contradicts the claim"
             accent="text-amber"
             items={groups.toward_fake_or_ooc}
-            empty="Nothing scored toward fake or out of context."
+            empty="No source or date scored against the claim."
           />
         </div>
+        <EvidenceBlock title="Weak clues" accent="text-mist" items={groups.weak_clues} empty="No weak clues were recorded." />
         <EvidenceBlock title="Couldn't check" accent="text-mist" items={groups.couldnt_check} empty="Every step in the pipeline ran." />
       </section>
 
@@ -1000,9 +1001,9 @@ function Receipt({
               className="mt-1.5 w-full rounded-xl border border-line bg-ink px-3 py-2 text-sm"
             >
               <option value="">I’m not sure</option>
-              <option value="Likely Real">Likely Real</option>
-              <option value="Likely AI or Fake">Likely AI or Fake</option>
-              <option value="Out of Context">Out of Context</option>
+              <option value="True">True</option>
+              <option value="Misleading or Out of Context">Misleading or Out of Context</option>
+              <option value="False">False</option>
               <option value="Unverified">Unverified</option>
             </select>
           </label>
@@ -1021,6 +1022,32 @@ function Receipt({
         </form>
       ) : null}
     </div>
+  )
+}
+
+function LinkCard({ link }) {
+  const when = (link.posted_at || '').slice(0, 10)
+  const isPost = link.kind === 'status'
+  return (
+    <section className="rounded-2xl border border-line bg-[#10161d] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">{isPost ? 'The post' : 'The page'}</h3>
+          <div className="mt-1 text-sm font-medium">{link.author || link.title || (isPost ? 'X post' : 'Linked page')}</div>
+          {when || link.author_url ? (
+            <div className="mt-0.5 font-mono text-[11px] text-mist">{[when, link.author_url ? hostOf(link.author_url) : ''].filter(Boolean).join(' · ')}</div>
+          ) : null}
+        </div>
+        {link.url ? (
+          <a href={link.url} target="_blank" rel="noreferrer" className="shrink-0 text-mist hover:text-lime">
+            <ArrowUpRight className="h-4 w-4" />
+          </a>
+        ) : null}
+      </div>
+      {link.status === 'error' ? <p className="mt-2 text-sm leading-6 text-rose">{link.detail || 'The link could not be read.'}</p> : null}
+      {link.text ? <p className="mt-2 text-sm leading-6 text-paper/90">{link.text}</p> : null}
+      {link.image_url ? <img src={link.image_url} alt="" className="mt-3 max-h-40 w-full rounded-xl object-cover" /> : null}
+    </section>
   )
 }
 
@@ -1069,7 +1096,7 @@ function HelpPanel({ meta, onClose }) {
               <Shield className="h-4 w-4" />
               <h2 className="text-lg font-semibold text-paper">What can I check?</h2>
             </div>
-            <p className="mt-1 text-sm text-mist">What this desk accepts, and which domains it treats as more credible.</p>
+            <p className="mt-1 text-sm text-mist">What this desk accepts. It checks the claim, not whether a picture was made by AI.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-full p-1 text-mist hover:text-paper">
             <X className="h-4 w-4" />
@@ -1081,10 +1108,18 @@ function HelpPanel({ meta, onClose }) {
             <dd className="mt-1 text-mist">{(accepted.formats || []).join(', ')}. Maximum {accepted.max_mb || 8} MB.</dd>
           </div>
           <div>
-            <dt className="font-medium">Links</dt>
+            <dt className="font-medium">Claim</dt>
+            <dd className="mt-1 text-mist">Plain text is enough. An image or file is optional context, not the thing being judged.</dd>
+          </div>
+          <div>
+            <dt className="font-medium">X and article links</dt>
             <dd className="mt-1 text-mist">
-              {accepted.image_url || 'Optional public http or https URL of the same image, used only for reverse-image lookup.'} A caption or claim is optional, but it helps.
+              Paste an x.com or twitter.com status URL. Provenance reads the post text, author, and date from X’s public oEmbed endpoint and uses that date when the claim says something is happening now. An article URL is read for its title and text, with You.com Contents when a key is set.
             </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Other links</dt>
+            <dd className="mt-1 text-mist">{accepted.image_url}</dd>
           </div>
           <div>
             <dt className="font-medium">Domains treated as credible</dt>
