@@ -5,11 +5,8 @@ from __future__ import annotations
 import hashlib
 import queue
 import re
-import threading
 import time
-import weakref
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, TimeoutError as FuturesTimeout, wait
-from concurrent.futures import thread as cf_thread
 from datetime import datetime, timezone
 from typing import Iterator
 
@@ -166,31 +163,9 @@ def _remaining(clock: float) -> float:
     return CHECK_DEADLINE_S - (time.monotonic() - clock)
 
 
-class _Pool(ThreadPoolExecutor):
-    """Worker threads are daemons so a step abandoned at the deadline cannot hold the process."""
-
-    def _adjust_thread_count(self) -> None:
-        if self._idle_semaphore.acquire(timeout=0):
-            return
-
-        def weakref_cb(_, q=self._work_queue):
-            q.put(None)
-
-        if len(self._threads) < self._max_workers:
-            thread_name = "%s_%d" % (self._thread_name_prefix or self, len(self._threads))
-            worker = threading.Thread(
-                name=thread_name,
-                target=cf_thread._worker,
-                args=(weakref.ref(self, weakref_cb), self._work_queue, self._initializer, self._initargs),
-            )
-            worker.daemon = True
-            worker.start()
-            self._threads.add(worker)
-            cf_thread._threads_queues[worker] = self._work_queue
-
-
-def _open_pool() -> _Pool:
-    return _Pool(max_workers=8, thread_name_prefix="provenance")
+def _open_pool() -> ThreadPoolExecutor:
+    """Public executor only. Private ThreadPoolExecutor fields differ across 3.11–3.15."""
+    return ThreadPoolExecutor(max_workers=8, thread_name_prefix="provenance")
 
 
 def _blank_call(detail: str, status: str = "error") -> dict:
