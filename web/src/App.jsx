@@ -24,6 +24,30 @@ const VERDICTS = {
   Unverified: { color: '#8B97A6', soft: 'rgba(139,151,166,0.12)', label: 'Unverified' },
 }
 
+const STAMPS = {
+  'Likely Real': ['REAL'],
+  'Likely AI or Fake': ['AI-MADE'],
+  'Out of Context': ['OUT OF', 'CONTEXT'],
+  Unverified: ['UNVERIFIED'],
+}
+
+const HOW = [
+  ['01', 'Read the file', 'EXIF and C2PA'],
+  ['02', 'Search the web', 'You.com sources'],
+  ['03', 'Score each clue', 'For, against, missed'],
+  ['04', 'Stamp a receipt', 'Verdict and limits'],
+]
+
+const STATUS_LABEL = {
+  queued: 'Waiting',
+  running: 'Running',
+  ok: 'Done',
+  skipped: 'Skipped',
+  error: 'Failed',
+}
+
+const RECENT_KEY = 'provenance-recent'
+
 function themeFor(verdict) {
   return VERDICTS[verdict] || VERDICTS.Unverified
 }
@@ -59,6 +83,15 @@ function acceptedFile(file) {
   return ''
 }
 
+function loadRecents() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]')
+    return Array.isArray(saved) ? saved.slice(0, 4) : []
+  } catch {
+    return []
+  }
+}
+
 export default function App() {
   const [health, setHealth] = useState(null)
   const [meta, setMeta] = useState(null)
@@ -80,10 +113,12 @@ export default function App() {
   const [flagExpected, setFlagExpected] = useState('')
   const [flagNote, setFlagNote] = useState('')
   const [flagState, setFlagState] = useState('')
+  const [recents, setRecents] = useState([])
   const inputRef = useRef(null)
-  const receiptRef = useRef(null)
+  const stageRef = useRef(null)
 
   useEffect(() => {
+    setRecents(loadRecents())
     fetch('/api/health')
       .then((r) => r.json())
       .then(setHealth)
@@ -124,6 +159,26 @@ export default function App() {
     if (preview && preview.startsWith('blob:')) URL.revokeObjectURL(preview)
   }
 
+  function remember(payload) {
+    const row = {
+      receipt_id: payload.receipt_id,
+      verdict: payload.verdict,
+      confidence: payload.confidence,
+      claim: (payload.claim?.text || '').slice(0, 96),
+      demo_id: payload.demo_id || '',
+      at: payload.checked_at || '',
+    }
+    setRecents((prev) => {
+      const next = [row, ...prev.filter((item) => item.receipt_id !== row.receipt_id)].slice(0, 4)
+      try {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+      } catch {
+        // recent checks are a convenience; the receipt itself is the record
+      }
+      return next
+    })
+  }
+
   function onPickFile(next) {
     if (!next) return
     const problem = acceptedFile(next)
@@ -147,6 +202,21 @@ export default function App() {
     setPreview(`/api/demos/${demo.id}/image`)
     setError('')
     setResult(null)
+  }
+
+  function resetDesk() {
+    clearPreview()
+    setFile(null)
+    setPreview('')
+    setDemoId('')
+    setClaim('')
+    setImageUrl('')
+    setResult(null)
+    setError('')
+    setStages([])
+    setBusy(false)
+    setFlagOpen(false)
+    setFlagState('')
   }
 
   async function startCheck(overrides = {}) {
@@ -185,6 +255,7 @@ export default function App() {
         flags: [],
       })),
     )
+    stageRef.current?.scrollTo({ top: 0 })
 
     try {
       await runCheck(body, {
@@ -208,7 +279,8 @@ export default function App() {
           setResult(payload)
           setBusy(false)
           if (payload.preview_url) setPreview(payload.preview_url)
-          setTimeout(() => receiptRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+          remember(payload)
+          requestAnimationFrame(() => stageRef.current?.scrollTo({ top: 0, behavior: 'smooth' }))
         },
       })
     } catch (err) {
@@ -256,34 +328,44 @@ export default function App() {
     }
   }
 
+  function openRecent(item) {
+    if (busy || !item.demo_id) return
+    const demo = demos.find((entry) => entry.id === item.demo_id)
+    if (!demo) return
+    chooseDemo(demo)
+    void startCheck({ demo_id: demo.id, claim: demo.claim })
+  }
+
   const currentPreview = preview || (demoId ? `/api/demos/${demoId}/image` : '')
+  const selectedDemo = demos.find((demo) => demo.id === demoId)
+  const mode = busy ? 'live' : result ? 'receipt' : currentPreview ? 'ready' : 'idle'
+  const connected = Boolean(health?.keys?.youcom)
 
   return (
-    <div className="min-h-screen bg-ink text-paper">
-      <header className="sticky top-0 z-30 border-b border-line/80 bg-ink/85 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-5">
-          <div className="flex items-center gap-3">
+    <div className="flex min-h-dvh flex-col bg-ink text-paper lg:h-dvh lg:overflow-hidden">
+      <header className="z-30 shrink-0 border-b border-line bg-ink/90 backdrop-blur-md">
+        <div className="flex h-14 items-center justify-between gap-3 px-3 sm:px-4">
+          <button type="button" onClick={resetDesk} className="flex items-center gap-2.5 text-left">
             <Logo className="h-8 w-8" />
-            <div>
-              <div className="text-[15px] font-semibold tracking-tight">Provenance</div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Newsroom desk</div>
-            </div>
-          </div>
+            <span>
+              <span className="block text-[15px] font-semibold leading-none tracking-tight">Provenance</span>
+              <span className="mt-1 block font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Newsroom desk</span>
+            </span>
+          </button>
           <div className="flex items-center gap-2">
-            {health?.keys?.youcom ? (
-              <span className="hidden items-center gap-1.5 rounded-full border border-lime/20 bg-lime/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-lime sm:inline-flex">
-                <span className="h-1.5 w-1.5 rounded-full bg-lime" />
-                You.com connected
-              </span>
-            ) : (
-              <span className="hidden rounded-full border border-line px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-mist sm:inline-flex">
-                You.com offline
-              </span>
-            )}
+            <span
+              className={cn(
+                'hidden items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider sm:inline-flex',
+                connected ? 'border-lime/20 bg-lime/10 text-lime' : 'border-line text-mist',
+              )}
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', connected ? 'bg-lime' : 'bg-mist/70')} />
+              {connected ? 'You.com connected' : 'You.com offline'}
+            </span>
             <button
               type="button"
               onClick={() => setHelpOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-sm text-paper/90 transition hover:border-lime/40 hover:text-lime"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line px-2.5 py-1.5 text-[13px] text-paper/90 transition hover:border-lime/40 hover:text-lime sm:px-3"
             >
               <CircleHelp className="h-3.5 w-3.5" />
               What can I check?
@@ -298,14 +380,18 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-6xl gap-6 px-5 py-8 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:items-start">
-        <section className="space-y-4">
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(320px,392px)_minmax(0,1fr)]">
+        <aside className="intake flex min-h-0 flex-col gap-2.5 overflow-y-auto border-line px-3 py-3 sm:px-3.5 lg:border-r">
           <div>
             <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-lime">Image check</p>
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-[2.1rem]">Drop a viral image</h1>
-            <p className="mt-2 max-w-md text-sm leading-6 text-mist">
-              See whether it looks real, AI-made, or out of context — and exactly which clues led there. The checker can be wrong. The receipt is there so you can judge it yourself.
+            <h1 className="mt-1 font-serif text-[1.85rem] leading-none tracking-tight">Drop a viral image</h1>
+            <p className="mt-1.5 text-[13px] leading-5 text-mist">
+              Real, AI-made, or out of context — with the clues that led there. The checker can be wrong. The receipt is yours to judge.
             </p>
+          </div>
+
+          <div className="lg:hidden">
+            <DemoTray demos={demos} demoId={demoId} onChoose={chooseDemo} layout="strip" />
           </div>
 
           <label
@@ -320,20 +406,28 @@ export default function App() {
               onPickFile(e.dataTransfer.files?.[0])
             }}
             className={cn(
-              'group relative flex min-h-[200px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed border-line bg-panel text-center transition',
-              drag && 'border-lime bg-lime/5',
+              'group relative flex cursor-pointer overflow-hidden rounded-2xl border border-dashed bg-[#10161d] text-left transition',
+              drag ? 'border-lime bg-lime/5' : 'border-line hover:border-lime/35',
+              currentPreview ? 'min-h-0 items-center gap-3 p-2' : 'min-h-[92px] flex-col items-center justify-center px-4 py-3 text-center',
             )}
           >
             {currentPreview ? (
-              <img src={currentPreview} alt="Selected file" className="absolute inset-0 h-full w-full object-cover opacity-80" />
-            ) : null}
-            <div className={cn('relative z-10 flex flex-col items-center gap-2 px-6 py-8', currentPreview && 'rounded-xl bg-ink/70 backdrop-blur-sm')}>
-              <div className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-panel-2">
-                <ImagePlus className="h-4 w-4 text-lime" />
-              </div>
-              <div className="text-sm font-medium">{file?.name || (demoId ? `${demoId} demo` : 'Drop a JPEG, PNG, or WebP')}</div>
-              <div className="text-xs text-mist">Up to 8 MB. Click to browse.</div>
-            </div>
+              <>
+                <img src={currentPreview} alt="" className="h-14 w-[4.75rem] shrink-0 rounded-lg object-cover" />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{file?.name || selectedDemo?.title || 'Image on the desk'}</span>
+                  <span className="mt-0.5 block text-xs text-mist">Click or drop to replace. Up to 8 MB.</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="flex h-9 w-9 items-center justify-center rounded-full border border-line bg-panel-2">
+                  <ImagePlus className="h-4 w-4 text-lime" />
+                </span>
+                <span className="mt-2 block text-sm font-medium">Drop a JPEG, PNG, or WebP</span>
+                <span className="mt-0.5 block text-xs text-mist">Up to 8 MB. Click to browse.</span>
+              </>
+            )}
             <input
               ref={inputRef}
               type="file"
@@ -343,15 +437,15 @@ export default function App() {
             />
           </label>
 
-          <div className="space-y-3 rounded-2xl border border-line bg-panel p-4">
+          <div className="space-y-2 rounded-2xl border border-line bg-[#10161d] p-2.5">
             <label className="block">
               <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Caption or claim</span>
               <textarea
                 value={claim}
                 onChange={(e) => setClaim(e.target.value)}
-                rows={3}
+                rows={2}
                 placeholder="What is this image being said to show?"
-                className="mt-1.5 w-full resize-none rounded-xl border border-line bg-ink px-3 py-2.5 text-sm leading-6 text-paper placeholder:text-mist/60"
+                className="mt-1.5 w-full resize-none rounded-xl border border-line bg-ink px-3 py-2 text-sm leading-5 text-paper placeholder:text-mist/60 focus:border-lime/50"
               />
             </label>
             <label className="block">
@@ -362,7 +456,7 @@ export default function App() {
                   value={imageUrl}
                   onChange={(e) => setImageUrl(e.target.value)}
                   placeholder="https://… used only for reverse image search"
-                  className="w-full rounded-xl border border-line bg-ink py-2.5 pl-9 pr-3 text-sm text-paper placeholder:text-mist/60"
+                  className="w-full rounded-xl border border-line bg-ink py-2 pl-9 pr-3 text-sm text-paper placeholder:text-mist/60 focus:border-lime/50"
                 />
               </div>
             </label>
@@ -370,141 +464,304 @@ export default function App() {
               type="button"
               disabled={busy}
               onClick={() => void startCheck()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-lime px-4 py-2.5 text-sm font-semibold text-ink transition hover:bg-lime/90 disabled:cursor-wait disabled:opacity-70"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-lime px-4 py-2.5 text-sm font-semibold text-ink shadow-[0_0_24px_rgba(200,245,74,0.16)] transition hover:bg-lime/90 disabled:cursor-wait disabled:opacity-70"
             >
               {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               {busy ? 'Checking…' : 'Check image'}
             </button>
           </div>
 
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Try a demo</h2>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {demos.map((demo) => (
-                <button
-                  key={demo.id}
-                  type="button"
-                  onClick={() => chooseDemo(demo)}
-                  className={cn(
-                    'overflow-hidden rounded-xl border border-line bg-panel text-left transition hover:border-lime/40',
-                    demoId === demo.id && 'border-lime/60 ring-1 ring-lime/30',
-                  )}
-                >
-                  <img src={`/api/demos/${demo.id}/image`} alt="" className="h-16 w-full object-cover" />
-                  <div className="px-2.5 py-2">
-                    <div className="text-xs font-medium">{demo.title}</div>
-                    <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-mist">{demo.claim}</div>
+          <div className="hidden lg:mt-auto lg:block">
+            <DemoTray demos={demos} demoId={demoId} onChoose={chooseDemo} layout="stack" />
+          </div>
+        </aside>
+
+        <section className="flex min-h-[70vh] min-w-0 flex-col bg-[#080c11] lg:min-h-0">
+          <div ref={stageRef} className="stage-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+            {error ? (
+              <div className="mx-4 mt-4 flex items-start gap-2 rounded-xl border border-rose/30 bg-rose/10 px-3 py-2.5 text-sm text-paper lg:mx-5">
+                <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose" />
+                <span>{error}</span>
+              </div>
+            ) : null}
+
+            {mode === 'idle' ? <StageIdle onHelp={() => setHelpOpen(true)} /> : null}
+            {mode === 'ready' ? (
+              <ReadyStage src={currentPreview} title={file?.name || selectedDemo?.title || 'Selected image'} claim={claim} />
+            ) : null}
+            {mode === 'live' ? (
+              <>
+                <Hero src={currentPreview} alt="Image being checked">
+                  <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-ink/75 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-lime backdrop-blur">
+                    <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" />
+                    Live
                   </div>
-                </button>
-              ))}
-            </div>
+                </Hero>
+                <ProgressPanel stages={stages} />
+              </>
+            ) : null}
+            {mode === 'receipt' && result ? (
+              <>
+                <Hero src={currentPreview} alt="Checked image">
+                  <div className="absolute right-5 top-5 sm:right-7 sm:top-6">
+                    <Stamp verdict={result.verdict} />
+                  </div>
+                  <div className="absolute inset-x-0 bottom-0 p-4 sm:p-5">
+                    <div className="max-w-xl">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/70">Receipt {result.receipt_id}</div>
+                      <p className="mt-1 line-clamp-2 text-sm leading-5 text-white">{result.summary}</p>
+                      <div className="mt-3 flex items-center gap-3">
+                        <div className="h-1.5 w-36 overflow-hidden rounded-full bg-white/20">
+                          <div className="h-full rounded-full" style={{ width: `${result.confidence}%`, background: themeFor(result.verdict).color }} />
+                        </div>
+                        <span className="font-mono text-xs text-white">{result.confidence}%</span>
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-white/60">Not a guarantee</span>
+                      </div>
+                    </div>
+                  </div>
+                </Hero>
+                <Receipt
+                  result={result}
+                  copied={copied}
+                  onCopy={copyReceipt}
+                  flagOpen={flagOpen}
+                  setFlagOpen={setFlagOpen}
+                  flagReason={flagReason}
+                  setFlagReason={setFlagReason}
+                  flagExpected={flagExpected}
+                  setFlagExpected={setFlagExpected}
+                  flagNote={flagNote}
+                  setFlagNote={setFlagNote}
+                  flagState={flagState}
+                  onFlag={submitFlag}
+                />
+              </>
+            ) : null}
           </div>
         </section>
+      </div>
 
-        <section ref={receiptRef} className="min-h-[28rem]">
-          {error ? (
-            <div className="fade-up rounded-2xl border border-rose/30 bg-rose/10 p-5 text-sm leading-6 text-paper">
-              <div className="flex items-center gap-2 font-medium text-rose">
-                <CircleAlert className="h-4 w-4" />
-                Something needs a look
-              </div>
-              <p className="mt-2 text-paper/80">{error}</p>
-            </div>
-          ) : null}
-
-          {busy ? <ProgressPanel stages={stages} preview={currentPreview} /> : null}
-
-          {!busy && result ? (
-            <Receipt
-              result={result}
-              preview={currentPreview}
-              copied={copied}
-              onCopy={copyReceipt}
-              flagOpen={flagOpen}
-              setFlagOpen={setFlagOpen}
-              flagReason={flagReason}
-              setFlagReason={setFlagReason}
-              flagExpected={flagExpected}
-              setFlagExpected={setFlagExpected}
-              flagNote={flagNote}
-              setFlagNote={setFlagNote}
-              flagState={flagState}
-              onFlag={submitFlag}
-            />
-          ) : null}
-
-          {!busy && !result && !error ? <EmptyState onHelp={() => setHelpOpen(true)} /> : null}
-        </section>
-      </main>
+      <footer className="shrink-0 border-t border-line bg-[#0c1117] px-3 py-2.5 sm:px-4">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <ol className="flex gap-x-4 gap-y-1 overflow-x-auto">
+            {HOW.map(([num, title, detail]) => (
+              <li key={num} className="flex items-baseline gap-2 whitespace-nowrap">
+                <span className="font-mono text-[10px] text-lime">{num}</span>
+                <span className="text-xs font-medium">{title}</span>
+                <span className="hidden text-[11px] text-mist xl:inline">{detail}</span>
+              </li>
+            ))}
+          </ol>
+          <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+            <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Recent</span>
+            {recents.length ? (
+              recents.map((item) => {
+                const theme = themeFor(item.verdict)
+                return (
+                  <button
+                    key={item.receipt_id}
+                    type="button"
+                    onClick={() => openRecent(item)}
+                    disabled={!item.demo_id || busy}
+                    title={item.claim || item.verdict}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-ink px-2 py-1 text-[11px] text-paper/90 transition hover:border-lime/40 disabled:cursor-default disabled:opacity-80"
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: theme.color }} />
+                    <span className="max-w-[9rem] truncate">{item.verdict}</span>
+                    <span className="font-mono text-mist">{item.confidence}%</span>
+                  </button>
+                )
+              })
+            ) : (
+              <span className="text-xs text-mist">No checks on this desk yet.</span>
+            )}
+          </div>
+        </div>
+      </footer>
 
       {helpOpen ? <HelpPanel meta={meta} onClose={() => setHelpOpen(false)} /> : null}
     </div>
   )
 }
 
-function EmptyState({ onHelp }) {
+function DemoTray({ demos, demoId, onChoose, layout }) {
+  if (!demos.length) {
+    return <p className="text-xs text-mist">Sample cases load with the desk.</p>
+  }
+  const strip = layout === 'strip'
   return (
-    <div className="fade-up flex min-h-[28rem] flex-col justify-between rounded-2xl border border-line bg-panel p-6">
-      <div>
-        <Logo className="h-12 w-12" />
-        <h2 className="mt-5 text-xl font-semibold">A receipt, not a black box</h2>
-        <p className="mt-2 max-w-sm text-sm leading-6 text-mist">
-          When you run a check, you will see each step as it happens, then how every clue scored — including the ones we could not run.
-        </p>
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <h2 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Case files</h2>
+        <span className="font-mono text-[10px] text-mist">{demos.length} samples</span>
       </div>
-      <ol className="space-y-3 text-sm">
-        {[
-          'The file is read for EXIF and C2PA.',
-          'You.com searches and opens sources.',
-          'Each clue is scored for or against the claim.',
-          'You get the verdict, the limits, and what to check next.',
-        ].map((line, i) => (
-          <li key={line} className="flex gap-3 text-mist">
-            <span className="font-mono text-[11px] text-lime">0{i + 1}</span>
-            {line}
-          </li>
-        ))}
-      </ol>
-      <button type="button" onClick={onHelp} className="self-start text-sm text-lime hover:underline">
-        What can I check?
-      </button>
+      <div className={cn(strip ? '-mx-1 flex gap-2 overflow-x-auto px-1 pb-1' : 'grid grid-cols-3 gap-2')}>
+        {demos.map((demo, index) => {
+          const selected = demoId === demo.id
+          return (
+            <button
+              key={demo.id}
+              type="button"
+              onClick={() => onChoose(demo)}
+              aria-pressed={selected}
+              className={cn(
+                'overflow-hidden rounded-xl border bg-[#10161d] text-left transition hover:border-lime/40',
+                strip ? 'w-[15.5rem] shrink-0 snap-start' : 'flex flex-col',
+                selected ? 'border-lime/70 ring-1 ring-lime/30' : 'border-line',
+              )}
+            >
+              <span className="relative block">
+                <img
+                  src={`/api/demos/${demo.id}/image`}
+                  alt=""
+                  className={cn('w-full object-cover', strip ? 'h-28' : 'h-[4.75rem]')}
+                />
+                <span className="absolute left-1.5 top-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] text-lime">0{index + 1}</span>
+                {selected && !strip ? (
+                  <span className="absolute bottom-1.5 right-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-lime">
+                    On stage
+                  </span>
+                ) : null}
+              </span>
+              <span className={cn('block min-w-0', strip ? 'px-2.5 py-2' : 'px-1.5 py-1.5')}>
+                <span className={cn('block font-medium leading-4', strip ? 'text-[13px]' : 'line-clamp-2 min-h-8 text-[12px]')}>{demo.title}</span>
+                {strip ? <span className="mt-0.5 block line-clamp-2 text-[11px] leading-4 text-mist">{demo.claim}</span> : null}
+              </span>
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
-function ProgressPanel({ stages, preview }) {
+function CropMarks() {
+  const corner = 'absolute h-4 w-4 border-lime/50'
   return (
-    <div className="fade-up rounded-2xl border border-line bg-panel p-5">
-      <div className="flex items-start justify-between gap-4">
+    <>
+      <span className={cn(corner, 'left-4 top-4 border-l border-t')} />
+      <span className={cn(corner, 'right-4 top-4 border-r border-t')} />
+      <span className={cn(corner, 'bottom-4 left-4 border-b border-l')} />
+      <span className={cn(corner, 'bottom-4 right-4 border-b border-r')} />
+    </>
+  )
+}
+
+function StageIdle({ onHelp }) {
+  return (
+    <div className="flex h-full min-h-[520px] flex-col p-4 sm:p-5">
+      <div className="relative flex flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-line bg-[radial-gradient(ellipse_at_center,rgba(200,245,74,0.07),transparent_62%)]">
+        <CropMarks />
+        <Logo className="h-14 w-14" />
+        <h2 className="mt-4 px-6 text-center font-serif text-3xl tracking-tight sm:text-4xl">A receipt, not a black box</h2>
+        <p className="mt-3 max-w-md px-6 text-center text-sm leading-6 text-mist">
+          The picture lands here. You will see each step as it happens, then how every clue scored — including the ones we could not run.
+        </p>
+        <button type="button" onClick={onHelp} className="mt-4 text-sm text-lime hover:underline">
+          What can I check?
+        </button>
+      </div>
+      <ol className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {[
+          ['01', 'The file is read for EXIF and C2PA.'],
+          ['02', 'You.com searches and opens sources.'],
+          ['03', 'Each clue is scored for or against the claim.'],
+          ['04', 'You get the verdict, the limits, and what to check next.'],
+        ].map(([num, line]) => (
+          <li key={num} className="rounded-xl border border-line bg-[#10161d] px-3 py-2.5">
+            <div className="font-mono text-[10px] text-lime">{num}</div>
+            <p className="mt-1 text-[12px] leading-4 text-mist">{line}</p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+function ReadyStage({ src, title, claim }) {
+  return (
+    <div className="flex h-full min-h-[420px] flex-col">
+      <div className="relative flex min-h-[280px] flex-1 items-center justify-center overflow-hidden p-4 sm:p-6">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-50"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px)',
+            backgroundSize: '28px 28px',
+          }}
+        />
+        <img src={src} alt={title} className="relative max-h-full max-w-full rounded-xl shadow-[0_24px_80px_rgba(0,0,0,0.5)]" />
+      </div>
+      <div className="flex items-end justify-between gap-4 border-t border-line px-4 py-3 sm:px-5">
+        <div className="min-w-0">
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">On the desk</div>
+          <div className="truncate text-sm font-medium">{title}</div>
+          <p className="truncate text-xs text-mist">{claim || 'Add a caption, then check the image.'}</p>
+        </div>
+        <div className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-mist">Ready</div>
+      </div>
+    </div>
+  )
+}
+
+function Hero({ src, alt, children }) {
+  return (
+    <div className="relative h-[220px] shrink-0 overflow-hidden bg-[#05070a] sm:h-[260px] lg:h-[280px]">
+      {src ? <img src={src} alt={alt} className="h-full w-full object-cover" /> : null}
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0d] via-[#070a0d]/15 to-[#070a0d]/25" />
+      {children}
+    </div>
+  )
+}
+
+function Stamp({ verdict }) {
+  const theme = themeFor(verdict)
+  const lines = STAMPS[verdict] || STAMPS.Unverified
+  return (
+    <div className="stamp" style={{ color: theme.color }} aria-label={verdict}>
+      {lines.map((line) => (
+        <span key={line}>{line}</span>
+      ))}
+    </div>
+  )
+}
+
+function ProgressPanel({ stages }) {
+  const flagCount = stages.reduce((count, stage) => count + (stage.flags?.length || 0), 0)
+  return (
+    <div className="fade-up px-4 py-4 sm:px-5">
+      <div className="flex items-end justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">Live check</p>
-          <h2 className="mt-1 text-lg font-semibold">Working through the evidence</h2>
+          <h2 className="mt-1 text-base font-semibold">Flags appear as each step finishes</h2>
         </div>
-        {preview ? <img src={preview} alt="" className="h-14 w-14 rounded-lg object-cover" /> : null}
+        <div className="font-mono text-[11px] text-mist">
+          {flagCount} flag{flagCount === 1 ? '' : 's'}
+        </div>
       </div>
-      <ol className="mt-5 space-y-0">
+      <ol className="mt-4">
         {stages.map((stage, index) => (
-          <li key={stage.id} className="relative flex gap-3 pb-4">
-            {index < stages.length - 1 ? <span className="absolute left-[7px] top-4 h-full w-px bg-line" /> : null}
+          <li key={stage.id} className="relative flex gap-3 pb-3.5">
+            {index < stages.length - 1 ? <span className="absolute left-[7px] top-4 h-[calc(100%-4px)] w-px bg-line" /> : null}
             <StatusDot status={stage.status} />
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 rounded-xl border border-transparent px-2 py-0.5 transition" style={stage.status === 'running' ? { background: 'rgba(200,245,74,0.05)' } : undefined}>
               <div className="flex items-baseline justify-between gap-3">
                 <div className="text-sm font-medium">{stage.label}</div>
-                <div className="font-mono text-[10px] uppercase tracking-wider text-mist">{stage.status}</div>
+                <div className={cn('font-mono text-[10px] uppercase tracking-wider', stage.status === 'running' ? 'text-lime' : 'text-mist')}>
+                  {STATUS_LABEL[stage.status] || stage.status}
+                </div>
               </div>
               {stage.detail ? <p className="mt-0.5 text-xs leading-5 text-mist">{stage.detail}</p> : null}
               {stage.flags?.length ? (
-                <div className="mt-2 flex flex-wrap gap-1.5">
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {stage.flags.map((flag, i) => (
                     <span
                       key={`${flag.label}-${i}`}
                       className={cn(
-                        'rounded-full border border-line bg-ink px-2 py-0.5 text-[11px] text-paper/80',
-                        flag.tone === 'fake' && 'border-rose/30 text-rose',
-                        flag.tone === 'real' && 'border-lime/30 text-lime',
-                        flag.tone === 'verdict' && 'border-amber/30 text-amber',
+                        'flag-in rounded-full border border-line bg-ink px-2 py-0.5 text-[11px] text-paper/85',
+                        flag.tone === 'fake' && 'border-rose/40 text-rose',
+                        flag.tone === 'real' && 'border-lime/40 text-lime',
+                        flag.tone === 'verdict' && 'border-amber/40 text-amber',
                       )}
                     >
                       {flag.label}
@@ -536,7 +793,6 @@ function StatusDot({ status }) {
 
 function Receipt({
   result,
-  preview,
   copied,
   onCopy,
   flagOpen,
@@ -556,45 +812,40 @@ function Receipt({
   const total = Math.max(1, scores.real + scores.fake + scores.out_of_context)
 
   return (
-    <div className="fade-up space-y-4">
-      <article className="overflow-hidden rounded-2xl border border-line bg-panel">
-        <div className="flex flex-wrap items-stretch gap-0 border-b border-line">
-          <div className="min-w-[16rem] flex-1 p-5">
-            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Receipt {result.receipt_id}</p>
-            <div
-              className="mt-3 inline-block rounded-lg border px-3 py-2 font-mono text-xl font-semibold uppercase tracking-wide sm:text-2xl"
-              style={{ color: theme.color, borderColor: theme.color, background: theme.soft }}
-            >
-              {result.verdict}
-            </div>
-            <p className="mt-3 max-w-lg text-sm leading-6 text-mist">{result.summary}</p>
-          </div>
-          {preview ? <img src={preview} alt="" className="h-40 w-44 object-cover sm:h-auto" /> : null}
-        </div>
-
-        <div className="space-y-2 p-5">
+    <div className="fade-up space-y-3 px-4 py-4 sm:px-5 sm:pb-6">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <section className="rounded-2xl border border-line bg-[#10161d] p-4">
           <div className="flex items-end justify-between gap-3">
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">How strong the clues are</div>
-              <div className="mt-1 text-2xl font-semibold tabular-nums">{result.confidence}%</div>
+              <div className="mt-1 text-3xl font-semibold tabular-nums" style={{ color: theme.color }}>
+                {result.confidence}%
+              </div>
             </div>
-            <div className="text-right text-[11px] text-mist">Not a guarantee</div>
+            <div className="text-right">
+              <div className="text-[11px] text-mist">Not a guarantee</div>
+              <div className="mt-1 text-sm font-medium" style={{ color: theme.color }}>
+                {result.verdict}
+              </div>
+            </div>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-ink">
-            <div className="h-full rounded-full transition-all" style={{ width: `${result.confidence}%`, background: theme.color }} />
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-ink">
+            <div className="h-full rounded-full" style={{ width: `${result.confidence}%`, background: theme.color }} />
           </div>
-          <p className="text-sm leading-6 text-paper/85">{result.confidence_note}</p>
-        </div>
-      </article>
-
-      {result.claim?.text ? (
-        <section className="rounded-2xl border border-line bg-panel p-5">
-          <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">The claim</h3>
-          <p className="mt-2 text-sm leading-6">{result.claim.text}</p>
+          <p className="mt-3 text-sm leading-6 text-paper/85">{result.confidence_note}</p>
         </section>
-      ) : null}
 
-      <section className="rounded-2xl border border-line bg-panel p-5">
+        {result.claim?.text ? (
+          <section className="rounded-2xl border border-line bg-[#10161d] p-4">
+            <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">The claim</h3>
+            <p className="mt-2 text-sm leading-6">{result.claim.text}</p>
+          </section>
+        ) : (
+          <section className="rounded-2xl border border-line bg-[#10161d] p-4 text-sm text-mist">No caption was attached to this check.</section>
+        )}
+      </div>
+
+      <section className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
         <h3 className="text-sm font-semibold">How this verdict was reached</h3>
         <div className="mt-3 flex h-2 overflow-hidden rounded-full bg-ink">
           <div className="bg-lime" style={{ width: `${(100 * scores.real) / total}%` }} />
@@ -606,18 +857,19 @@ function Receipt({
           <span className="text-rose">Fake {scores.fake}</span>
           <span className="text-amber">Out of context {scores.out_of_context}</span>
         </div>
-
-        <EvidenceBlock title="Points toward real" accent="text-lime" items={groups.toward_real} empty="Nothing scored toward real." />
-        <EvidenceBlock
-          title="Points toward fake / out of context"
-          accent="text-amber"
-          items={groups.toward_fake_or_ooc}
-          empty="Nothing scored toward fake or out of context."
-        />
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <EvidenceBlock title="Points toward real" accent="text-lime" items={groups.toward_real} empty="Nothing scored toward real." />
+          <EvidenceBlock
+            title="Points toward fake / out of context"
+            accent="text-amber"
+            items={groups.toward_fake_or_ooc}
+            empty="Nothing scored toward fake or out of context."
+          />
+        </div>
         <EvidenceBlock title="Couldn't check" accent="text-mist" items={groups.couldnt_check} empty="Every step in the pipeline ran." />
       </section>
 
-      <section className="rounded-2xl border border-line bg-panel p-5">
+      <section className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
         <h3 className="text-sm font-semibold">Sources</h3>
         <ul className="mt-3 space-y-3">
           {(result.sources || []).length ? (
@@ -646,11 +898,11 @@ function Receipt({
       </section>
 
       {(result.timeline || []).length ? (
-        <section className="rounded-2xl border border-line bg-panel p-5">
+        <section className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
           <h3 className="text-sm font-semibold">Timeline</h3>
           <ol className="mt-3 space-y-3">
             {result.timeline.map((event, i) => (
-              <li key={`${event.at}-${i}`} className="grid grid-cols-[7rem_1fr] gap-3 text-sm">
+              <li key={`${event.at}-${i}`} className="grid grid-cols-[7.5rem_1fr] gap-3 text-sm">
                 <span className="font-mono text-[11px] text-mist">{event.at}</span>
                 <span>{event.label}</span>
               </li>
@@ -659,7 +911,7 @@ function Receipt({
         </section>
       ) : null}
 
-      <section className="rounded-2xl border border-line bg-panel p-5">
+      <section className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
         <h3 className="text-sm font-semibold">What you can do next</h3>
         <p className="mt-1 text-sm text-mist">These are checks you can run yourself if you want a second look.</p>
         <ul className="mt-4 space-y-4">
@@ -689,7 +941,7 @@ function Receipt({
       </section>
 
       {result.caveats?.length > 1 ? (
-        <section className="rounded-2xl border border-line bg-panel p-5">
+        <section className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
           <h3 className="text-sm font-semibold">What could make this wrong</h3>
           <ul className="mt-3 space-y-2">
             {result.caveats.slice(1).map((note) => (
@@ -723,7 +975,7 @@ function Receipt({
       </div>
 
       {flagOpen ? (
-        <form onSubmit={onFlag} className="space-y-3 rounded-2xl border border-line bg-panel p-5">
+        <form onSubmit={onFlag} className="space-y-3 rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
           <p className="text-sm leading-6 text-mist">
             If this reading looks off, say why. The flag is stored with the receipt so it can be reviewed later.
           </p>
@@ -774,7 +1026,7 @@ function Receipt({
 
 function EvidenceBlock({ title, accent, items, empty }) {
   return (
-    <div className="mt-5">
+    <div className="mt-1">
       <h4 className={cn('font-mono text-[10px] uppercase tracking-[0.16em]', accent)}>{title}</h4>
       {items?.length ? (
         <ul className="mt-2 divide-y divide-line">
@@ -810,7 +1062,7 @@ function HelpPanel({ meta, onClose }) {
   }
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/70 p-4 sm:items-center">
-      <div className="max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-panel p-5 shadow-2xl">
+      <div className="max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-[#10161d] p-5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-lime">
