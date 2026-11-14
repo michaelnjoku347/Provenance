@@ -228,3 +228,7 @@ web/node_modules/
 # Keep the built frontend so the API can serve it without npm.
 !web/dist/
 !web/dist/**
+
+# The global lib/ rule is for Python packaging output. The desk helpers live here.
+!web/src/lib/
+!web/src/lib/**
