@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import time
 
-from urllib.parse import quote
-
 from app import config, httputil, sponsors
 
 
@@ -76,32 +74,21 @@ def lookup(image_url: str) -> dict:
             "matches": [],
         }
     started = time.perf_counter()
-    endpoint = f"https://treg.to/call/{tool}?url={quote(image_url, safe='')}&gl=us&hl=en"
-    status, body = 0, None
     try:
-        status, body = httputil.get_json(
-            endpoint,
+        status, body = httputil.post_json(
+            f"https://treg.to/call/{tool}",
             {"X-Treg-Token": config.key("TREG_API_KEY")},
-            timeout=15,
+            {"url": image_url, "gl": "us", "hl": "en"},
+            timeout=25,
         )
     except Exception:
-        status, body = 0, None
-    if status != 200 or not isinstance(body, dict):
-        try:
-            status, body = httputil.post_json(
-                f"https://treg.to/call/{tool}",
-                {"X-Treg-Token": config.key("TREG_API_KEY")},
-                {"url": image_url, "gl": "us", "hl": "en"},
-                timeout=15,
-            )
-        except Exception:
-            return {
-                "status": "error",
-                "detail": "Treg reverse-image request failed.",
-                "tool": tool,
-                "matches": [],
-                "latency_ms": 0,
-            }
+        return {
+            "status": "error",
+            "detail": "Treg reverse-image request failed.",
+            "tool": tool,
+            "matches": [],
+            "latency_ms": 0,
+        }
     elapsed = max(0, int((time.perf_counter() - started) * 1000))
     if status != 200 or not isinstance(body, dict):
         sponsors.record("treg", called=True, latency_ms=elapsed, matches=0, status="error")

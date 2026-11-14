@@ -300,7 +300,12 @@ export default function App() {
             .then(setSponsorStatus)
             .catch(() => {})
           remember(payload)
-          requestAnimationFrame(() => stageRef.current?.scrollTo({ top: 0, behavior: 'smooth' }))
+          requestAnimationFrame(() => {
+            const card = document.getElementById('result-card')
+            const narrow = window.matchMedia('(max-width: 1023px)').matches
+            if (narrow && card) card.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            else stageRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+          })
         },
       })
     } catch (err) {
@@ -523,7 +528,7 @@ export default function App() {
               </>
             ) : null}
             {mode === 'receipt' && result ? (
-              <>
+              <div id="result-card">
                 {(currentPreview || result.preview_url) ? (
                   <div className="h-28 shrink-0 overflow-hidden bg-[#05070a]">
                     <img src={currentPreview || result.preview_url} alt="" className="h-full w-full object-cover" />
@@ -544,7 +549,7 @@ export default function App() {
                   flagState={flagState}
                   onFlag={submitFlag}
                 />
-              </>
+              </div>
             ) : null}
           </div>
         </section>
@@ -882,6 +887,8 @@ function SponsorTrace({ result }) {
 
 function PosterChip({ poster }) {
   const followers = Number(poster.followers)
+  const loaded = Boolean(poster?.name || poster?.description || poster?.verified || (Number.isFinite(followers) && followers > 0))
+  if (!loaded) return null
   const count = Number.isFinite(followers) ? followers.toLocaleString('en-US') : String(poster.followers || '0')
   return (
     <p className="rounded-full border border-line bg-[#10161d] px-3 py-1.5 text-xs text-mist">

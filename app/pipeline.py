@@ -440,7 +440,7 @@ def iter_run(
     yield _stage(
         "vision",
         vision_stage["status"],
-        "Gemini" if assist.get("provider") in {"Gemini", "OpenAI"} else "SEE",
+        "Gemini" if assist.get("provider") in {"Gemini", "OpenAI"} else "Vision assist",
         vision_stage["detail"],
         [{"label": (assist.get("text") or seen_text or "Vision assist skipped")[:80], "tone": "neutral"}],
         sponsor="gemini" if assist.get("provider") else "see",
@@ -471,7 +471,7 @@ def iter_run(
         query = subject["query"]
         claim["search_query"] = query
 
-    yield _stage("youcom_search", "running", "PROVE", query or "Searching credible sources for the claim.", sponsor="prove")
+    yield _stage("youcom_search", "running", "You.com Search", query or "Searching credible sources for the claim.", sponsor="prove")
     yield _stage("treg_news", "running", "Treg News", "Fresh headlines for the same query.", sponsor="treg_news")
     yield _stage("treg_web", "running", "Treg Web", "Cross-checking the open web.", sponsor="treg_web")
 
@@ -502,7 +502,7 @@ def iter_run(
                     yield _stage(
                         "youcom_search",
                         data["status"],
-                        "PROVE",
+                        "You.com Search",
                         data.get("detail") or "",
                         _search_flags(data),
                         sponsor="youcom_search",

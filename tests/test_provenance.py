@@ -213,8 +213,21 @@ def test_treg_reverse_image_is_optional(client, monkeypatch):
             ]
         }
 
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in str(url):
+            return 200, {
+                "organic": [
+                    {
+                        "title": "Downtown flood, March 2011",
+                        "link": "https://example.com/2011-flood",
+                        "date": "2011-03-12",
+                    }
+                ]
+            }
+        return 200, {"output": {"results": []}}
+
     monkeypatch.setattr("app.httputil.get_json", fake_get)
-    monkeypatch.setattr("app.httputil.post_json", lambda *args, **kwargs: (200, {"output": {"results": []}}))
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
     skipped = client.post("/api/check", json={"demo_id": "archive"})
     assert skipped.json()["stages"]["reverse_image"]["status"] == "skipped"
     found = client.post(
@@ -609,8 +622,13 @@ def test_treg_match_is_tagged_and_timed(client, monkeypatch):
         assert "treg.to" in url
         return 200, {"organic": [{"title": "Downtown flood, March 2011", "link": "https://example.com/2011-flood", "date": "2011-03-12"}]}
 
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in str(url):
+            return 200, {"organic": [{"title": "Downtown flood, March 2011", "link": "https://example.com/2011-flood", "date": "2011-03-12"}]}
+        return 200, {"output": {"results": []}}
+
     monkeypatch.setattr("app.httputil.get_json", fake_get)
-    monkeypatch.setattr("app.httputil.post_json", lambda *args, **kwargs: (200, {"output": {"results": []}}))
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
     body = client.post(
         "/api/check",
         json={"demo_id": "archive", "image_url": "https://cdn.example.com/flood.jpg"},
@@ -651,6 +669,16 @@ def test_image_question_uses_treg_names_then_youcom(client, monkeypatch):
         }
 
     def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in url:
+            return 200, {
+                "organic": [
+                    {
+                        "title": "NVIDIA CEO Jensen Huang and his wife Lori Huang",
+                        "link": "https://www.reuters.com/technology/jensen-huang-profile",
+                        "snippet": "NVIDIA CEO Jensen Huang and his wife Lori Huang.",
+                    }
+                ]
+            }
         if "fixture.vision.caption" in url:
             return 200, {"caption": "NVIDIA CEO Jensen Huang standing beside his wife Lori Huang."}
         if url.endswith("/v1/search"):
@@ -929,6 +957,8 @@ def test_huang_live_fixture_names_the_couple_and_the_speculation(client, monkeyp
         return 200, lens
 
     def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in url:
+            return 200, lens
         if url.endswith("/v1/search"):
             seen["query"] = payload["query"]
             web = []
@@ -1058,6 +1088,13 @@ def test_treg_news_web_and_x_are_separate_rows(client, monkeypatch):
             tool = url.rsplit("/", 1)[-1]
             seen["tools"].append(tool)
             assert timeout <= 25
+            if "serp.lens" in tool:
+                return 200, {
+                    "output": {
+                        "knowledge_graph": {"title": "Jensen Huang"},
+                        "visual_matches": [{"title": "Jensen Huang on stage", "link": "https://www.reuters.com/photo"}],
+                    }
+                }
             if tool == "treg.google.serp.news":
                 return 200, {"output": {"results": [{"title": "Fortune on Jensen Huang", "link": "https://fortune.com/huang", "published_at": "2026-11-14T09:37:00Z", "source": "Fortune"}]}}
             if tool == "treg.google.serp.organic":
