@@ -618,7 +618,12 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
         if fact and fact.lower() not in sentence.lower():
             sentence = f"{sentence} {fact}"
         credible = any(item.get("credible") for item in sources)
-        if "identity" in kinds and "relationship" not in kinds and (credible or sources):
+        if "relationship" in kinds:
+            sentence = "The people in this photo could not be named from credible matches, so whether they are divorced is not settled."
+            verdict = UNVERIFIED
+            line = "The people could not be named with confidence, so their relationship is not settled."
+            confidence = min(int(decision.get("confidence") or 40), 45)
+        elif "identity" in kinds and (credible or sources):
             verdict = "Answered"
             line = "Identified from the image and confirmed by credible sources."
             confidence = max(int(decision.get("confidence") or 0), 78)
