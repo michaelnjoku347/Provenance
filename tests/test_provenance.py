@@ -1,4 +1,5 @@
 import base64
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,12 +43,42 @@ def test_health_and_homepage(client):
     assert body["keys"]["xdc_ai"] is False
 
 
-def test_demos_list_three_samples(client):
+def test_treg_news_can_lead_the_receipts():
+    from app.questions import compose
+
+    hits = [
+        {"url": "https://www.forbes.com/a", "title": "Forbes older", "excerpt": "Married for years.", "found_by": "You.com Search"},
+        {"url": "https://en.ilsole24ore.com/a", "title": "Il Sole", "excerpt": "Speculation only.", "found_by": "You.com Search"},
+        {"url": "https://www.reuters.com/a", "title": "Reuters", "excerpt": "A profile.", "found_by": "You.com Search"},
+        {"url": "https://fortune.com/huang", "title": "Fortune on the Huang divorce question", "excerpt": "Fortune reported on November 14, 2026.", "found_by": "Treg News", "page_age": "2026-11-14T09:37:00Z"},
+    ]
+    card = compose(
+        "what car is this?",
+        {"verdict": "Unverified", "confidence": 40, "summary": "", "contributions": []},
+        {"search": {"hits": hits}, "contents": {"pages": []}, "answer": {"text": "This is a Tesla Model 3, a mid-size electric sedan with a 2026 starting price of $36,990."}},
+        {},
+        {"seen": "Identified by Treg Google Lens: Tesla Model 3.", "questions": [{"id": "what", "kind": "identity", "text": "what car is this?"}], "names": []},
+    )
+    assert card["verdict"] == "Answered"
+    assert card["confidence"] >= 78
+    assert card["sources"][0]["found_by"] == "Treg News"
+    assert card["sources"][0]["domain"] == "fortune.com"
+
+
+def test_demos_list_real_samples(client):
     body = client.get("/api/demos").json()
-    assert [item["id"] for item in body["demos"]] == ["wire", "synthetic", "archive"]
-    image = client.get("/api/demos/synthetic/image")
+    assert [item["id"] for item in body["demos"]] == ["tesla", "huang", "reuters-post", "copacabana"]
+    blob = json.dumps(body)
+    assert "gossip.example" not in blob
+    assert "city hall" not in blob.lower()
+    assert "stable diffusion" not in blob.lower()
+    assert all(item["verdict"] == "" for item in body["demos"])
+    assert {item["label"] for item in body["demos"]} == {"Real photo", "Real post"}
+    image = client.get("/api/demos/tesla/image")
     assert image.status_code == 200
     assert image.content[:3] == b"\xff\xd8\xff"
+    fixture = client.get("/api/demos/synthetic/image")
+    assert fixture.status_code == 200
 
 
 def test_samples_fall_back_without_network(client, monkeypatch):

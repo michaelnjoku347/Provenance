@@ -182,14 +182,22 @@ async def check(request: Request) -> dict:
 
 @app.post("/api/check/stream")
 async def check_stream(request: Request):
-    payload = await _payload(request)
+    try:
+        payload = await _payload(request)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc) or "The check could not start."
+
+        def failed():
+            yield f"event: error\ndata: {json.dumps({'detail': str(detail)})}\n\n"
+
+        return StreamingResponse(failed(), media_type="text/event-stream")
 
     def events():
         try:
             for ev in pipeline.iter_request(payload):
                 yield f"event: {ev['event']}\ndata: {json.dumps(ev['data'], default=str)}\n\n"
-        except ValueError as exc:
-            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+        except Exception as exc:
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc) or 'The check failed.'})}\n\n"
 
     return StreamingResponse(
         events(),

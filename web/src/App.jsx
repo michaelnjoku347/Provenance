@@ -18,6 +18,7 @@ import { runCheck, STAGE_FALLBACK } from './lib/api.js'
 import { cn } from './lib/cn.js'
 
 const VERDICTS = {
+  Answered: { color: '#C8F54A', soft: 'rgba(200,245,74,0.12)', label: 'Answered' },
   True: { color: '#C8F54A', soft: 'rgba(200,245,74,0.12)', label: 'True' },
   False: { color: '#FF5C7A', soft: 'rgba(255,92,122,0.12)', label: 'False' },
   'Misleading or Out of Context': { color: '#FFB020', soft: 'rgba(255,176,32,0.12)', label: 'Misleading or Out of Context' },
@@ -25,6 +26,7 @@ const VERDICTS = {
 }
 
 const STAMPS = {
+  Answered: ['ANSWERED'],
   True: ['TRUE'],
   False: ['FALSE'],
   'Misleading or Out of Context': ['MISLEADING'],
@@ -205,6 +207,7 @@ export default function App() {
     setFile(null)
     setDemoId(demo.id)
     setClaim(demo.claim || '')
+    setImageUrl(demo.url || '')
     setPreview(`/api/demos/${demo.id}/image`)
     setError('')
     setResult(null)
@@ -603,7 +606,7 @@ function DemoTray({ demos, demoId, onChoose, layout }) {
         <h2 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Sample claims</h2>
         <span className="font-mono text-[10px] text-mist">{demos.length} samples</span>
       </div>
-      <div className={cn(strip ? '-mx-1 flex gap-2 overflow-x-auto px-1 pb-1' : 'grid grid-cols-3 gap-2')}>
+      <div className={cn(strip ? '-mx-1 flex gap-2 overflow-x-auto px-1 pb-1' : 'grid grid-cols-2 gap-2')}>
         {demos.map((demo, index) => {
           const selected = demoId === demo.id
           return (
@@ -624,7 +627,7 @@ function DemoTray({ demos, demoId, onChoose, layout }) {
                   alt=""
                   className={cn('w-full object-cover', strip ? 'h-28' : 'h-[4.75rem]')}
                 />
-                <span className="absolute left-1.5 top-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] text-lime">0{index + 1}</span>
+                <span className="absolute left-1.5 top-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-lime">{demo.label || demo.blurb || `0${index + 1}`}</span>
                 {selected && !strip ? (
                   <span className="absolute bottom-1.5 right-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-lime">
                     On stage
@@ -830,7 +833,7 @@ function AnswerCard({ result }) {
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium">{source.title}</span>
-                <span className="font-mono text-[10px] uppercase tracking-wider text-cyan">{source.domain}</span>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-cyan">{source.found_by ? `${source.found_by} · ` : ''}{source.domain}</span>
               </div>
               {source.quote ? <p className="mt-1 line-clamp-2 text-sm text-mist">{source.quote}</p> : null}
             </a>

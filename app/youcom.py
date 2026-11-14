@@ -69,16 +69,20 @@ def _ms(started: float) -> int:
 
 
 def _search(query: str) -> dict:
+    from app.verdict import _recent_claim
+
     started = time.perf_counter()
     payload = {
         "query": query,
         "count": 10,
         "extraction": {"extraction_mode": "highlights"},
         "knowledge": "core",
-        "freshness": "week",
     }
+    if _recent_claim(query):
+        payload["freshness"] = "week"
     status, body = httputil.post_json(SEARCH_URL, _headers(), payload, timeout=25)
-    if status >= 400:
+    hits = _parse_search(body) if status == 200 and isinstance(body, dict) else []
+    if status >= 400 or (payload.get("freshness") and not hits):
         payload.pop("freshness", None)
         status, body = httputil.post_json(SEARCH_URL, _headers(), payload, timeout=25)
     if status != 200 or not isinstance(body, dict):

@@ -246,6 +246,7 @@ def iter_run(
     image_url: str = "",
     demo_id: str | None = None,
     filename: str = "",
+    photo_url: bool = False,
 ) -> Iterator[dict]:
     claim_text = (claim_text or "").strip()[:2000]
     image_url = (image_url or "").strip()
@@ -256,6 +257,8 @@ def iter_run(
             image = fetched
             media_type = fetched_type or media_type
             image_from_url = True
+    if photo_url and image:
+        image_from_url = True
     cache_key = _cache_key(image, claim_text, image_url)
     cached = store.get(cache_key)
     if cached:
@@ -315,20 +318,41 @@ def iter_run(
     elif link.get("kind") == "article":
         reverse_url = ""
     yield _stage("reverse_image", "running", "Treg Lens", "Identifying the photo from visual matches.", sponsor="treg_lens")
-    if reverse_url.startswith("http"):
+    yield _stage("vision", "running", "Gemini", "vision assist", sponsor="gemini")
+
+    def _lens():
+        if not reverse_url.startswith("http"):
+            return {
+                "status": "skipped",
+                "detail": "Reverse image needs a public image URL.",
+                "matches": [],
+                "tool": "",
+                "latency_ms": 0,
+                "knowledge_title": "",
+            }
         try:
-            reverse = reverse_image.lookup(reverse_url)
+            return reverse_image.lookup(reverse_url)
         except Exception:
-            reverse = {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0, "knowledge_title": ""}
-    else:
-        reverse = {
-            "status": "skipped",
-            "detail": "Reverse image needs a public image URL.",
-            "matches": [],
-            "tool": "",
-            "latency_ms": 0,
-            "knowledge_title": "",
-        }
+            return {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0, "knowledge_title": ""}
+
+    def _assist():
+        try:
+            return see.describe(image_url, image, media_type, claim_text)
+        except Exception:
+            return {
+                "status": "error",
+                "text": "",
+                "what": "",
+                "provider": "",
+                "detail": "Vision assist unavailable. The check continued.",
+                "latency_ms": 0,
+            }
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        lens_f = pool.submit(_lens)
+        assist_f = pool.submit(_assist)
+        reverse = lens_f.result()
+        assist = assist_f.result()
     matches = reverse.get("matches") or []
     lens_name = (reverse.get("knowledge_title") or "").strip()
     if not lens_name and matches:
@@ -348,18 +372,6 @@ def iter_run(
         stats={"latency_ms": int(reverse.get("latency_ms") or 0), "matches": len(matches)},
     )
 
-    yield _stage("vision", "running", "Gemini", "vision assist", sponsor="gemini")
-    try:
-        assist = see.describe(image_url, image, media_type, claim_text)
-    except Exception:
-        assist = {
-            "status": "error",
-            "text": "",
-            "what": "",
-            "provider": "",
-            "detail": "Vision assist unavailable. The check continued.",
-            "latency_ms": 0,
-        }
     assist_what = " ".join(str(assist.get("what") or "").split())[:80]
     if assist_what and not (reverse.get("knowledge_title") or "").strip() and matches:
         head = assist_what.split()[0].lower()
@@ -418,7 +430,13 @@ def iter_run(
         context = ""
         if image_url.startswith("http") and not links.is_direct_image(image_url):
             context = ""
-        subject = questions.identify(claim.get("text") or claim_text, matches, f"{context} {claim.get('seen') or ''}", claim.get("what") or "")
+        subject = questions.identify(
+            claim.get("text") or claim_text,
+            matches,
+            f"{context} {claim.get('seen') or ''}",
+            claim.get("what") or "",
+            skip_model=bool(lens_name),
+        )
         if claim.get("seen"):
             subject["seen"] = claim["seen"]
     except Exception:
@@ -536,10 +554,10 @@ def iter_run(
     paywall = config.paywall_on()
     yield _stage(
         "x402",
-        "ok" if paywall else "skipped",
-        "XDC x402",
-        "Pay-per-verify is armed." if paywall else "Test mode. This desk check is not charged.",
-        [{"label": "Live" if paywall else "Test mode", "tone": "neutral"}],
+        "skipped",
+        "Paywall ready ($0.02 on XDC)",
+        "Paywall ready ($0.02 on XDC). This desk check is not a verified payment.",
+        [{"label": "Paywall ready" if paywall else "Test mode", "tone": "neutral"}],
         sponsor="x402",
         stats={"mode": "live" if paywall else "test", "price_usdc": sponsors.receipt({}, {}).get("x402", {}).get("price_usdc", "0.02")},
     )
@@ -566,6 +584,7 @@ def run(
     image_url: str = "",
     demo_id: str | None = None,
     filename: str = "",
+    photo_url: bool = False,
 ) -> dict:
     final = None
     for ev in iter_run(
@@ -575,6 +594,7 @@ def run(
         image_url=image_url,
         demo_id=demo_id,
         filename=filename,
+        photo_url=photo_url,
     ):
         if ev["event"] == "result":
             final = ev["data"]
@@ -589,15 +609,20 @@ def _prepare_request(payload: dict) -> dict:
     media_type = payload.get("media_type") or "image/jpeg"
     filename = payload.get("filename") or ""
     claim = payload.get("claim") or ""
-    if demo_id and not image:
+    image_url = str(payload.get("image_url") or "").strip()
+    payload_photo = False
+    if demo_id:
         sample = samples.get(demo_id)
         if sample is None:
             raise ValueError("Unknown demo_id.")
-        image = sample["bytes"]
-        filename = filename or f"{demo_id}.jpg"
+        if not image and sample.get("attach", True) and sample.get("bytes"):
+            image = sample["bytes"]
+            filename = filename or f"{demo_id}.jpg"
         if not str(claim).strip():
             claim = sample["claim"]
-    image_url = str(payload.get("image_url") or "").strip()
+        if not image_url and sample.get("url"):
+            image_url = sample["url"]
+        payload_photo = bool(sample.get("attach") and sample.get("url") and image)
     if not image and not str(claim).strip() and not image_url:
         raise ValueError("Send a claim, a link, an image, a file, or a demo_id.")
     return {
@@ -607,6 +632,7 @@ def _prepare_request(payload: dict) -> dict:
         "image_url": image_url,
         "demo_id": demo_id,
         "filename": filename,
+        "photo_url": payload_photo,
     }
 
 

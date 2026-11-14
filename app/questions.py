@@ -388,10 +388,10 @@ def _from_model(matches: list[dict], page_text: str) -> dict:
     }
 
 
-def identify(claim_text: str, matches: list[dict], context: str = "", seen_what: str = "") -> dict:
+def identify(claim_text: str, matches: list[dict], context: str = "", seen_what: str = "", skip_model: bool = False) -> dict:
     context = repair_text(context or "")
     blob = _blob(matches, context)
-    model = _from_model(matches, context)
+    model = {} if skip_model else _from_model(matches, context)
     left, right = _wife_pair(blob)
     counts = _name_counts(matches, context)
     names: list[str] = []
@@ -445,16 +445,15 @@ def _quote(hit: dict) -> str:
     return " ".join(text.split())[:180]
 
 
-def _rank(hit: dict) -> int:
+def _rank(hit: dict) -> tuple:
     url = hit.get("url") or ""
     if is_rumor(url):
-        return 3
-    level = tier(url)
-    if level == 1:
-        return 0
-    if level == 2:
-        return 1
-    return 2
+        level = 3
+    else:
+        scored = tier(url)
+        level = 0 if scored == 1 else 1 if scored == 2 else 2
+    news = 0 if hit.get("found_by") == "Treg News" and level < 3 else 1
+    return (level, news)
 
 
 def _top_sources(hits: list[dict]) -> list[dict]:
@@ -473,6 +472,7 @@ def _top_sources(hits: list[dict]) -> list[dict]:
                 "domain": host_of(url),
                 "quote": _quote(hit),
                 "credible": is_credible(url),
+                "found_by": hit.get("found_by") or "",
             }
         )
         if len(rows) == 3:
@@ -618,8 +618,8 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
         if fact and fact.lower() not in sentence.lower():
             sentence = f"{sentence} {fact}"
         credible = any(item.get("credible") for item in sources)
-        if "identity" in kinds and (credible or sources):
-            verdict = "True"
+        if "identity" in kinds and "relationship" not in kinds and (credible or sources):
+            verdict = "Answered"
             line = "Identified from the image and confirmed by credible sources."
             confidence = max(int(decision.get("confidence") or 0), 78)
         else:

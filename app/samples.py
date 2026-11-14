@@ -1,4 +1,4 @@
-"""Three synthetic sample images so the desk demo runs without API keys."""
+"""Real sample cards for the desk, plus the old EXIF fixtures the tests still use."""
 
 from __future__ import annotations
 
@@ -13,7 +13,50 @@ MODEL = 272
 SOFTWARE = 305
 DATETIME = 306
 
-MANIFEST = [
+PUBLIC = [
+    {
+        "id": "tesla",
+        "file": "tesla.jpg",
+        "title": "What car is this?",
+        "blurb": "Real photo",
+        "label": "Real photo",
+        "claim": "what car is this?",
+        "url": "https://images.unsplash.com/photo-1560958089-b8a1929cea89?w=1200",
+        "attach": True,
+    },
+    {
+        "id": "huang",
+        "file": "huang.jpg",
+        "title": "Who are these two?",
+        "blurb": "Real photo",
+        "label": "Real photo",
+        "claim": "Are these two divorced and who are these two?",
+        "url": "https://cafefcdn.com/thumb_w/1200/203337114487263232/2024/11/25/avatar1732525933296-1732525938744619592903.jpg",
+        "attach": True,
+    },
+    {
+        "id": "reuters-post",
+        "file": "reuters-post.jpg",
+        "title": "Reuters on X",
+        "blurb": "Real post",
+        "label": "Real post",
+        "claim": "Trump tells advisers he may hold off on Iran attacks barring new provocations, sources say",
+        "url": "https://x.com/Reuters/status/2121624210791440863",
+        "attach": False,
+    },
+    {
+        "id": "copacabana",
+        "file": "copacabana.jpg",
+        "title": "Copacabana or a rally?",
+        "blurb": "Real post",
+        "label": "Real post",
+        "claim": "This photo shows Donald Trump's May 11 rally in Wildwood, New Jersey.",
+        "url": "https://www.reuters.com/fact-check/photo-brazils-copacabana-beach-miscaptioned-new-jersey-trump-rally-2024-05-14/",
+        "attach": False,
+    },
+]
+
+FIXTURES = [
     {
         "id": "wire",
         "file": "wire.jpg",
@@ -69,6 +112,14 @@ def _stamp(draw: ImageDraw.ImageDraw, text: str, xy: tuple[int, int]) -> None:
     draw.text((xy[0] + 12, xy[1] + 7), text, fill=(255, 248, 240))
 
 
+def _card(title: str, subtitle: str) -> Image.Image:
+    image = _gradient((960, 600), (16, 22, 28), (8, 12, 16))
+    draw = ImageDraw.Draw(image)
+    draw.text((48, 230), title, fill=(200, 245, 74))
+    draw.text((48, 280), subtitle, fill=(232, 237, 242))
+    return image
+
+
 def _draw(sample_id: str) -> Image.Image:
     if sample_id == "wire":
         image = _gradient((960, 600), (186, 214, 228), (92, 122, 138))
@@ -113,51 +164,65 @@ def _write(sample: dict, path) -> None:
     image.save(path, format="JPEG", quality=86, exif=exif.tobytes())
 
 
+def _all() -> list[dict]:
+    return PUBLIC + FIXTURES
+
+
 def ensure() -> None:
     config.SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
-    for sample in MANIFEST:
+    for sample in FIXTURES:
         path = config.SAMPLES_DIR / sample["file"]
         if not path.exists():
             _write(sample, path)
+    cards = {
+        "reuters-post": ("REUTERS", "Real post"),
+        "copacabana": ("REUTERS", "Fact check"),
+    }
+    for sample_id, (title, subtitle) in cards.items():
+        sample = next(item for item in PUBLIC if item["id"] == sample_id)
+        path = config.SAMPLES_DIR / sample["file"]
+        if not path.exists():
+            _card(title, subtitle).save(path, format="JPEG", quality=86)
     manifest_path = config.SAMPLES_DIR / "manifest.json"
-    public = [
-        {
-            "id": sample["id"],
-            "title": sample["title"],
-            "blurb": sample["blurb"],
-            "claim": sample["claim"],
-            "image": f"/api/demos/{sample['id']}/image",
-        }
-        for sample in MANIFEST
-    ]
-    manifest_path.write_text(json.dumps(public, indent=2), encoding="utf-8")
+    manifest_path.write_text(json.dumps(public_rows(), indent=2), encoding="utf-8")
+
+
+def _row(sample: dict) -> dict:
+    return {
+        "id": sample["id"],
+        "title": sample["title"],
+        "blurb": sample["blurb"],
+        "label": sample.get("label") or sample["blurb"],
+        "claim": sample["claim"],
+        "url": sample.get("url") or "",
+        "verdict": "",
+        "image": f"/api/demos/{sample['id']}/image",
+    }
+
+
+def public_rows() -> list[dict]:
+    return [_row(sample) for sample in PUBLIC]
 
 
 def get(sample_id: str) -> dict | None:
     ensure()
-    for sample in MANIFEST:
+    for sample in _all():
         if sample["id"] == sample_id:
             path = config.SAMPLES_DIR / sample["file"]
+            data = path.read_bytes() if path.exists() else b""
             return {
                 "id": sample["id"],
                 "title": sample["title"],
                 "blurb": sample["blurb"],
                 "claim": sample["claim"],
+                "url": sample.get("url") or "",
+                "attach": sample.get("attach", True),
                 "path": path,
-                "bytes": path.read_bytes(),
+                "bytes": data,
             }
     return None
 
 
 def public_list() -> list[dict]:
     ensure()
-    return [
-        {
-            "id": sample["id"],
-            "title": sample["title"],
-            "blurb": sample["blurb"],
-            "claim": sample["claim"],
-            "image": f"/api/demos/{sample['id']}/image",
-        }
-        for sample in MANIFEST
-    ]
+    return public_rows()

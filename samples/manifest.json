@@ -1,23 +1,42 @@
 [
   {
-    "id": "wire",
-    "title": "City hall, this morning",
-    "blurb": "A same-day claim about a crowd. Without sources this stays Unverified.",
-    "claim": "A crowd gathered outside city hall this morning after a surprise transit announcement.",
-    "image": "/api/demos/wire/image"
+    "id": "tesla",
+    "title": "What car is this?",
+    "blurb": "Real photo",
+    "label": "Real photo",
+    "claim": "what car is this?",
+    "url": "https://images.unsplash.com/photo-1560958089-b8a1929cea89?w=1200",
+    "verdict": "",
+    "image": "/api/demos/tesla/image"
   },
   {
-    "id": "synthetic",
-    "title": "Relief-bill claim",
-    "blurb": "The file names a generative tool, which is only a weak clue. Without sources the claim stays Unverified.",
-    "claim": "Breaking: this photograph shows the president signing the relief bill an hour ago.",
-    "image": "/api/demos/synthetic/image"
+    "id": "huang",
+    "title": "Who are these two?",
+    "blurb": "Real photo",
+    "label": "Real photo",
+    "claim": "Are these two divorced and who are these two?",
+    "url": "https://cafefcdn.com/thumb_w/1200/203337114487263232/2024/11/25/avatar1732525933296-1732525938744619592903.jpg",
+    "verdict": "",
+    "image": "/api/demos/huang/image"
   },
   {
-    "id": "archive",
-    "title": "Flooding, claimed as this morning",
-    "blurb": "The file date is 2011 and the claim says this morning, so the claim is misleading.",
-    "claim": "This photo was taken this morning of flooding downtown.",
-    "image": "/api/demos/archive/image"
+    "id": "reuters-post",
+    "title": "Reuters on X",
+    "blurb": "Real post",
+    "label": "Real post",
+    "claim": "Trump tells advisers he may hold off on Iran attacks barring new provocations, sources say",
+    "url": "https://x.com/Reuters/status/2121624210791440863",
+    "verdict": "",
+    "image": "/api/demos/reuters-post/image"
+  },
+  {
+    "id": "copacabana",
+    "title": "Copacabana or a rally?",
+    "blurb": "Real post",
+    "label": "Real post",
+    "claim": "This photo shows Donald Trump's May 11 rally in Wildwood, New Jersey.",
+    "url": "https://www.reuters.com/fact-check/photo-brazils-copacabana-beach-miscaptioned-new-jersey-trump-rally-2024-05-14/",
+    "verdict": "",
+    "image": "/api/demos/copacabana/image"
   }
 ]
