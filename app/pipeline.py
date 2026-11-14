@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 from datetime import datetime, timezone
 from typing import Iterator
@@ -239,6 +241,26 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
     return result
 
 
+_STOP_HEADS = {"the", "a", "an", "this", "these", "that", "those", "two", "they", "it", "people", "couple", "man", "woman", "image", "photo", "no", "not", "unknown"}
+_NAME_STOP = {"The", "This", "New", "Who", "What", "How", "Why", "CEO", "Nvidia", "NVIDIA", "Million", "Billion", "Settlement", "Divorce", "Gift", "State", "He", "She", "Used", "Service", "Repair", "Near", "Sale", "For", "Are", "Is"}
+
+
+def _recurring_name(matches: list) -> str:
+    """A person-style name (two capitalised words) that shows up in 2+ Lens match titles."""
+    counts: dict = {}
+    for m in matches:
+        title = str(m.get("title") or "")
+        seen = set()
+        for a, b in re.findall(r"(?=\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b)", title):
+            if a in _NAME_STOP or b in _NAME_STOP:
+                continue
+            seen.add(f"{a} {b}")
+        for name in seen:
+            counts[name] = counts.get(name, 0) + 1
+    best = sorted(counts.items(), key=lambda kv: -kv[1])
+    return best[0][0] if best and best[0][1] >= 2 else ""
+
+
 def iter_run(
     image: bytes,
     media_type: str,
@@ -371,9 +393,15 @@ def iter_run(
     )
 
     assist_what = " ".join(str(assist.get("what") or "").split())[:80]
-    if assist_what and not (reverse.get("knowledge_title") or "").strip() and matches:
+    if not lens_name and matches:
+        recurring = _recurring_name(matches[:8])
+        if recurring and assist_what and recurring.lower() in assist_what.lower():
+            lens_name = assist_what
+        elif recurring:
+            lens_name = recurring
+    if assist_what and not lens_name and matches:
         head = assist_what.split()[0].lower()
-        if any(head in str(m.get("title") or "").lower() for m in matches[:6]):
+        if head not in _STOP_HEADS and len(head) > 2 and any(re.search(rf"\b{re.escape(head)}\b", str(m.get("title") or "").lower()) for m in matches[:6]):
             lens_name = assist_what
     if lens_name:
         seen_text = f"Identified by Treg Google Lens: {lens_name}"

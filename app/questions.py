@@ -388,6 +388,36 @@ def _from_model(matches: list[dict], page_text: str) -> dict:
     }
 
 
+_REC_STOP = {"The", "This", "New", "Who", "What", "How", "Why", "CEO", "Nvidia", "NVIDIA", "Million", "Billion", "Settlement", "Divorce", "Gift", "State", "He", "She", "Used", "Service", "Repair", "Near", "Sale", "For", "Are", "Is", "Digitally", "Yours", "Woman", "Behind", "Wife", "Husband", "Could", "Yield", "Facing", "Fresh", "Helps", "Launch", "Founder", "Spouse", "Oregon"}
+
+
+def recurring_names(matches: list[dict]) -> list[str]:
+    """Person names (capitalised word pairs) repeated across 2+ reverse-image titles, best first."""
+    counts: dict[str, int] = {}
+    for item in (matches or [])[:8]:
+        found = set()
+        for a, b in re.findall(r"(?=\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b)", str(item.get("title") or "")):
+            if a not in _REC_STOP and b not in _REC_STOP:
+                found.add(f"{a} {b}")
+        for name in found:
+            counts[name] = counts.get(name, 0) + 1
+    ranked = [n for n, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if c >= 2]
+    merged: list[str] = []
+    used: set[str] = set()
+    for name in ranked:
+        if name in used:
+            continue
+        full = name
+        for other in ranked:
+            if other not in used and other != name and other.split()[0] == full.split()[-1]:
+                full = f"{full} {other.split()[1]}"
+                used.add(other)
+        used.add(name)
+        if not any(full in m or m in full for m in merged):
+            merged.append(full)
+    return merged[:2]
+
+
 def identify(claim_text: str, matches: list[dict], context: str = "", seen_what: str = "", skip_model: bool = False) -> dict:
     context = repair_text(context or "")
     blob = _blob(matches, context)
@@ -400,8 +430,16 @@ def identify(claim_text: str, matches: list[dict], context: str = "", seen_what:
             names.append(name)
     model_names = [n for n in (model.get("names") or []) if n and _ok(n)]
     seen_what = " ".join((seen_what or "").split())[:80]
+    if seen_what and (
+        seen_what.split()[0].lower() in {"the", "a", "an", "this", "these", "two", "they", "it", "no", "not", "unknown", "people", "couple"}
+        or re.search(r"\b(is|are|was|were|not)\b", seen_what, re.I)
+    ):
+        seen_what = ""
     head = seen_what.split()[0].lower() if seen_what else ""
-    if seen_what and model_names and any(head in name.lower() for name in model_names):
+    recurring = recurring_names(matches)
+    if recurring and not (seen_what and recurring[0].lower() in seen_what.lower()):
+        names = recurring
+    elif seen_what and model_names and any(head in name.lower() for name in model_names):
         names = [seen_what]
     elif model_names:
         names = model_names[:4]
