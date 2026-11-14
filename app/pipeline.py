@@ -6,7 +6,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Iterator
 
-from app import config, credentials, detector, explain, links, questions, reverse_image, samples, see, sponsors, store, verdict, youcom
+from app import config, credentials, detector, explain, httputil, links, questions, reverse_image, samples, see, sponsors, store, verdict, youcom
 
 
 def _stage_error(name: str) -> dict:
@@ -31,7 +31,7 @@ def _cache_key(image: bytes, claim_text: str, image_url: str) -> str:
     digest.update(image_url.encode())
     digest.update(b"\0")
     digest.update(flags.encode())
-    digest.update(b"\0claim-v3")
+    digest.update(b"\0claim-v4")
     return digest.hexdigest()
 
 
@@ -97,7 +97,26 @@ def _link_card(link: dict) -> dict:
     }
 
 
-def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link=None, subject=None) -> dict:
+def _download_image(image_url: str) -> tuple[bytes, str]:
+    """Fetch a public image so EXIF, vision, and the hash see the real bytes."""
+    try:
+        status, data, media = httputil.get_bytes(image_url, timeout=20)
+    except Exception:
+        return b"", ""
+    if status != 200 or not data or len(data) > 8_000_000:
+        return b"", ""
+    if data[:3] == b"\xff\xd8\xff":
+        media = "image/jpeg"
+    elif data[:8] == b"\x89PNG\r\n\x1a\n":
+        media = "image/png"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        media = "image/webp"
+    elif not media.startswith("image/"):
+        return b"", ""
+    return data, media or "image/jpeg"
+
+
+def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link=None, subject=None, image_from_url=False) -> dict:
     link = link or {}
     decision = verdict.decide(claim, creds, web, reverse, prior, posted_at=link.get("posted_at") or "")
     checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -144,7 +163,7 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
         "image_sha256": hashlib.sha256(image).hexdigest(),
         "filename": filename,
         "demo_id": demo_id,
-        "mode": "demo" if demo_id else "upload",
+        "mode": "demo" if demo_id else ("url" if image_from_url else "upload"),
         "checked_at": checked_at,
         "receipt_id": cache_key[:12],
         "cache": {"hit": False, "key": cache_key[:12]},
@@ -184,6 +203,13 @@ def iter_run(
 ) -> Iterator[dict]:
     claim_text = (claim_text or "").strip()[:2000]
     image_url = (image_url or "").strip()
+    image_from_url = False
+    if not image and links.is_direct_image(image_url):
+        fetched, fetched_type = _download_image(image_url)
+        if fetched:
+            image = fetched
+            media_type = fetched_type or media_type
+            image_from_url = True
     cache_key = _cache_key(image, claim_text, image_url)
     cached = store.get(cache_key)
     if cached:
@@ -248,6 +274,25 @@ def iter_run(
             "detail": "Vision step unavailable. The check continued.",
             "latency_ms": 0,
         }
+    reverse = None
+    reverse_url = image_url
+    if link.get("kind") == "status":
+        reverse_url = link.get("image_url") or ""
+    elif link.get("kind") == "article":
+        reverse_url = ""
+    if not seen.get("text") and reverse_url.startswith("http"):
+        try:
+            reverse = reverse_image.lookup(reverse_url)
+        except Exception:
+            reverse = {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0}
+        try:
+            fallback = see.from_matches(reverse.get("matches") or [], claim_text)
+        except Exception:
+            fallback = {"text": ""}
+        if fallback.get("text"):
+            seen = fallback
+        elif "continued" not in (seen.get("detail") or "").lower():
+            seen["detail"] = ((seen.get("detail") or "Vision step unavailable.") + " The check continued.").strip()
     claim = {
         "text": claim_text,
         "who": "",
@@ -277,17 +322,12 @@ def iter_run(
 
     yield _stage("reverse_image", "running", "FIND", "Treg reverse image and earlier appearances.", sponsor="find")
 
-    reverse_url = image_url
-    if link.get("kind") == "status":
-        reverse_url = link.get("image_url") or ""
-    elif link.get("kind") == "article":
-        reverse_url = ""
-    if reverse_url.startswith("http"):
+    if reverse is None and reverse_url.startswith("http"):
         try:
             reverse = reverse_image.lookup(reverse_url)
         except Exception:
             reverse = {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0}
-    else:
+    elif reverse is None:
         reverse = {
             "status": "skipped",
             "detail": "Reverse image needs a public image URL.",
@@ -327,7 +367,7 @@ def iter_run(
 
     web = {"search": {}, "contents": {}, "answer": {}}
     try:
-        for name, data in youcom.iter_investigate(query):
+        for name, data in youcom.iter_investigate(query, subject.get("questions") or None):
             web[name] = data
             if name == "search":
                 yield _stage(
@@ -398,7 +438,7 @@ def iter_run(
 
     yield _stage("verdict", "running", "Judging the claim", "Comparing sources and dates with what the claim says.")
     result = _assemble(
-        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link, subject
+        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link, subject, image_from_url
     )
     tone = "real" if result["verdict"] == "True" else "fake" if result["verdict"] == "False" else "verdict"
     yield _stage(

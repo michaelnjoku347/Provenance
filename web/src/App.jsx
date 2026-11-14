@@ -419,7 +419,7 @@ export default function App() {
                 onChange={(e) => setClaim(e.target.value)}
                 rows={3}
                 placeholder="What is being claimed? Leave this blank to use an X post or an article."
-                className="mt-1.5 w-full resize-none rounded-xl border border-line bg-ink px-3 py-2 text-sm leading-5 text-paper placeholder:text-mist/60 focus:border-lime/50"
+                className="field mt-1.5 w-full resize-none rounded-xl border border-line bg-ink px-3 py-2 text-sm leading-5 text-paper placeholder:text-mist/60"
               />
             </label>
             <label className="block">
@@ -429,8 +429,11 @@ export default function App() {
                 <input
                   value={imageUrl}
                   onChange={(e) => setImageUrl(e.target.value)}
-                  placeholder="x.com/…/status/… or an article URL"
-                  className="w-full rounded-xl border border-line bg-ink py-2 pl-9 pr-3 text-sm text-paper placeholder:text-mist/60 focus:border-lime/50"
+                  inputMode="url"
+                  spellCheck={false}
+                  aria-label="Link"
+                  placeholder="https:// or x.com/…/status/…"
+                  className="field w-full rounded-xl border border-line bg-ink py-2 pl-9 pr-3 font-mono text-[13px] text-paper placeholder:font-sans placeholder:text-mist/60"
                 />
               </div>
             </label>
@@ -446,12 +449,13 @@ export default function App() {
                 onPickFile(e.dataTransfer.files?.[0])
               }}
               className={cn(
-                'flex cursor-pointer items-center gap-3 rounded-xl border border-dashed p-2 text-left transition',
-                drag ? 'border-lime bg-lime/5' : 'border-line hover:border-lime/35',
+                'dropzone flex cursor-pointer items-center gap-3 rounded-xl border border-dashed p-2 text-left',
+                drag ? 'dropzone-hot border-lime bg-lime/5' : 'border-line hover:border-lime/35',
               )}
             >
+              <span className="drop-sheen" aria-hidden="true" />
               {currentPreview ? (
-                <img src={currentPreview} alt="" className="h-12 w-16 shrink-0 rounded-lg object-cover" />
+                <img src={currentPreview} alt="" className="h-14 w-20 shrink-0 rounded-lg object-cover ring-1 ring-white/10" />
               ) : (
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-panel-2">
                   <ImagePlus className="h-4 w-4 text-lime" />
@@ -475,7 +479,7 @@ export default function App() {
               type="button"
               disabled={busy}
               onClick={() => void startCheck()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-lime px-4 py-2.5 text-sm font-semibold text-ink shadow-[0_0_24px_rgba(200,245,74,0.16)] transition hover:bg-lime/90 disabled:cursor-wait disabled:opacity-70"
+              className="btn-primary inline-flex w-full items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold text-ink"
             >
               {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               {busy ? 'Checking…' : 'Check claim'}
@@ -502,7 +506,11 @@ export default function App() {
             ) : null}
             {mode === 'live' ? (
               <>
-                <Hero src={currentPreview} alt="Image being checked" scanning>
+                <Hero
+                  src={currentPreview}
+                  alt="Image being checked"
+                  scanning={stages.some((stage) => (stage.id === 'vision' || stage.id === 'reverse_image') && stage.status === 'running')}
+                >
                   <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-ink/75 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-lime backdrop-blur">
                     <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" />
                     Live
@@ -605,7 +613,7 @@ function DemoTray({ demos, demoId, onChoose, layout }) {
               onClick={() => onChoose(demo)}
               aria-pressed={selected}
               className={cn(
-                'overflow-hidden rounded-xl border bg-[#10161d] text-left transition hover:border-lime/40',
+                'sample-card overflow-hidden rounded-xl border bg-[#10161d] text-left hover:border-lime/40',
                 strip ? 'w-[15.5rem] shrink-0 snap-start' : 'flex flex-col',
                 selected ? 'border-lime/70 ring-1 ring-lime/30' : 'border-line',
               )}
@@ -709,7 +717,12 @@ function Hero({ src, alt, children, scanning = false }) {
     <div className={cn('relative h-[220px] shrink-0 overflow-hidden bg-[#05070a] sm:h-[260px] lg:h-[280px]', scanning && 'scanning')}>
       {src ? <img src={src} alt={alt} className="h-full w-full object-cover" /> : null}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0d] via-[#070a0d]/15 to-[#070a0d]/25" />
-      {scanning ? <span className="scanline" aria-hidden="true" /> : null}
+      {scanning ? (
+        <>
+          <span className="scanline" aria-hidden="true" />
+          <span className="scan-shimmer" aria-hidden="true" />
+        </>
+      ) : null}
       {children}
     </div>
   )
@@ -786,12 +799,14 @@ function AnswerCard({ result }) {
           <CountUp value={answer.confidence ?? result.confidence} />% confidence
         </span>
       </div>
-      <p className="mt-4 text-lg leading-7">{text}</p>
-      {answer.line ? <p className="mt-2 text-sm text-amber">{answer.line}</p> : null}
+      <p className="answer-line mt-4 text-lg leading-7">
+        <TypeLine text={text} />
+      </p>
+      {answer.line ? <p className="answer-line mt-2 text-sm text-amber">{answer.line}</p> : null}
       {why.length ? (
         <ul className="mt-4 space-y-2">
-          {why.map((item) => (
-            <li key={item.text} className="text-sm leading-6 text-mist">
+          {why.map((item, index) => (
+            <li key={item.text} className="why-in text-sm leading-6 text-mist" style={{ animationDelay: `${180 + index * 90}ms` }}>
               {item.text}
               {item.url ? (
                 <a href={item.url} target="_blank" rel="noreferrer" className="ml-2 text-cyan hover:underline">
@@ -804,8 +819,15 @@ function AnswerCard({ result }) {
       ) : null}
       {sources.length ? (
         <div className="mt-4 grid gap-2">
-          {sources.map((source) => (
-            <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="rounded-xl border border-line bg-ink px-3 py-2 hover:border-lime/40">
+          {sources.map((source, index) => (
+            <a
+              key={source.url}
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="source-in rounded-xl border border-line bg-ink px-3 py-2 hover:border-lime/40"
+              style={{ animationDelay: `${360 + index * 80}ms` }}
+            >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium">{source.title}</span>
                 <span className="font-mono text-[10px] uppercase tracking-wider text-cyan">{source.domain}</span>
@@ -856,8 +878,10 @@ function Receipt({
   return (
     <div className="fade-up space-y-3 px-4 py-4 sm:px-5 sm:pb-6">
       <AnswerCard result={result} />
-      <details className="rounded-2xl border border-line bg-[#10161d] px-4 py-3">
+      <details className="fold rounded-2xl border border-line bg-[#10161d] px-4 py-3">
         <summary className="cursor-pointer text-sm font-medium text-mist">All sources, the trace, and what could make this wrong</summary>
+        <div className="fold-body">
+        <div className="fold-inner">
         <div className="mt-4 space-y-3">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <section className="rounded-2xl border border-line bg-[#10161d] p-4">
@@ -1007,13 +1031,15 @@ function Receipt({
         </section>
       ) : null}
         </div>
+        </div>
+        </div>
       </details>
 
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setFlagOpen((open) => !open)}
-          className="inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm hover:border-amber/50 hover:text-amber"
+          className="btn-ghost inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm hover:border-amber/50 hover:text-amber"
         >
           <Flag className="h-3.5 w-3.5" />
           Disagree? Flag this result
@@ -1021,7 +1047,7 @@ function Receipt({
         <button
           type="button"
           onClick={onCopy}
-          className="inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm text-mist hover:text-paper"
+          className="btn-ghost inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm text-mist hover:text-paper"
         >
           <Clipboard className="h-3.5 w-3.5" />
           {copied ? 'Copied' : 'Copy receipt JSON'}
@@ -1129,6 +1155,8 @@ function SponsorChip({ stage }) {
         stage.status === 'running' && 'chip-live',
       )}
     >
+      {stage.status === 'running' ? <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" /> : null}
+      {stage.status === 'ok' ? <Check className="h-2.5 w-2.5" /> : null}
       {name}
       {stat ? <span className="normal-case tracking-normal text-paper/80">{stat}</span> : null}
       {typeof latency === 'number' && stage.status !== 'running' ? <span>{latency} ms</span> : null}
@@ -1210,6 +1238,24 @@ function X402Dialog({ status, onClose }) {
       </div>
     </div>
   )
+}
+
+function TypeLine({ text }) {
+  const full = text || ''
+  const reduce = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const [shown, setShown] = useState(reduce ? full : '')
+  useEffect(() => {
+    if (reduce || full.length < 2) return undefined
+    let index = 0
+    const step = Math.max(1, Math.ceil(full.length / 42))
+    const timer = window.setInterval(() => {
+      index = Math.min(full.length, index + step)
+      setShown(full.slice(0, index))
+      if (index >= full.length) window.clearInterval(timer)
+    }, 18)
+    return () => window.clearInterval(timer)
+  }, [full, reduce])
+  return reduce || full.length < 2 ? full : shown
 }
 
 function CountUp({ value }) {

@@ -8,8 +8,15 @@ from urllib.parse import quote
 
 from app import config, httputil, sponsors, vision
 
-_CATALOG = "https://treg.to/catalog/search?q=image%20caption%20vision%20multimodal"
-_HINTS = ("caption", "vision", "multimodal", "image-to-text", "ocr", "describe")
+_QUERIES = (
+    "image captioning",
+    "vision llm",
+    "describe image",
+    "gpt-4o",
+    "gemini",
+    "openrouter",
+)
+_HINTS = ("caption", "vision", "multimodal", "image-to-text", "ocr", "describe", "gpt-4o", "gemini")
 
 
 def _ms(started: float) -> int:
@@ -58,25 +65,46 @@ def _text_from(body) -> str:
     return ""
 
 
+def _search_catalog(token: str) -> tuple[str, str, int]:
+    """Try several catalog queries. Returns tool id, error detail, and elapsed ms."""
+    started = time.perf_counter()
+    last_status = 0
+    for query in _QUERIES:
+        try:
+            status, body = httputil.get_json(
+                f"https://treg.to/catalog/search?q={quote(query)}",
+                {"X-Treg-Token": token},
+                timeout=20,
+            )
+        except Exception:
+            return "", "Treg vision catalog could not be reached.", _ms(started)
+        last_status = status
+        if status != 200:
+            continue
+        tool = _pick(_tools(body))
+        if tool:
+            return tool, "", _ms(started)
+    env_tool = config.key("TREG_VISION_TOOL")
+    if env_tool:
+        return env_tool, "", _ms(started)
+    if last_status and last_status != 200:
+        return "", f"Treg vision catalog returned HTTP {last_status}.", _ms(started)
+    return "", "Treg catalog has no vision tool.", _ms(started)
+
+
 def _treg(image_url: str, image: bytes, media_type: str) -> dict:
     empty = {"status": "skipped", "text": "", "provider": "", "tool": "", "latency_ms": 0, "detail": ""}
     if not config.key("TREG_API_KEY"):
         empty["detail"] = "Treg vision: add key"
         return empty
-    started = time.perf_counter()
-    try:
-        status, body = httputil.get_json(
-            _CATALOG,
-            {"X-Treg-Token": config.key("TREG_API_KEY")},
-            timeout=20,
-        )
-    except Exception:
-        return {**empty, "status": "error", "detail": "Treg vision catalog could not be reached.", "latency_ms": _ms(started)}
-    if status != 200:
-        return {**empty, "status": "error", "detail": f"Treg vision catalog returned HTTP {status}.", "latency_ms": _ms(started)}
-    tool = _pick(_tools(body)) or (config.key("TREG_VISION_TOOL") or "")
+    tool, detail, elapsed = _search_catalog(config.key("TREG_API_KEY"))
+    if not tool and detail.startswith("Treg vision catalog could not"):
+        return {**empty, "status": "error", "detail": detail, "latency_ms": elapsed}
+    if not tool and "HTTP" in detail:
+        return {**empty, "status": "error", "detail": detail, "latency_ms": elapsed}
     if not tool:
-        return {**empty, "detail": "Treg catalog has no vision tool. The check continued.", "latency_ms": _ms(started)}
+        return {**empty, "detail": "Treg catalog has no vision tool. The check continued.", "latency_ms": elapsed}
+    started = time.perf_counter()
     prompt = "Describe this image. Name the main objects, people, or products, and transcribe any visible text."
     payload = {"prompt": prompt}
     if image_url:
@@ -162,4 +190,58 @@ def describe(image_url: str, image: bytes, media_type: str, caption: str) -> dic
         "tool": "",
         "latency_ms": 0,
         "detail": "Vision step unavailable. No Treg vision tool or Gemini/OpenAI key. The check continued.",
+    }
+
+
+def from_matches(matches: list, claim: str) -> dict:
+    """SEE fallback: name the photo from reverse-image titles when no vision tool exists."""
+    empty = {
+        "status": "skipped",
+        "text": "",
+        "provider": "",
+        "tool": "",
+        "latency_ms": 0,
+        "detail": "Vision step unavailable. No Treg vision tool or Gemini/OpenAI key. The check continued.",
+    }
+    if not matches:
+        return empty
+    lines = [f"- {item.get('title') or ''} {item.get('snippet') or ''}".strip() for item in matches[:8]]
+    text = ""
+    provider = "Treg lens"
+    if config.key("YDC_API_KEY"):
+        from app import youcom
+
+        prompt = (
+            "These reverse-image page titles describe one photo. "
+            "In one or two sentences, say who or what is shown. Do not decide whether anyone is divorced.\n"
+            + "\n".join(lines)
+        )
+        try:
+            answer = youcom.ask(prompt)
+        except Exception:
+            answer = {"text": ""}
+        text = " ".join((answer.get("text") or "").split())
+        if text:
+            provider = "You.com Answer"
+    if not text:
+        from app.questions import frequency_names
+
+        names = frequency_names(matches, claim)
+        if names:
+            shown = " and ".join(names[:2])
+            text = f"Reverse-image pages describe {shown}."
+    if not text:
+        return empty
+    detail = (
+        "No Treg vision tool was found. SEE used Treg reverse-image titles"
+        + (" and You.com Answer." if provider == "You.com Answer" else ".")
+        + " The check continued."
+    )
+    return {
+        "status": "ok",
+        "text": text[:800],
+        "provider": provider,
+        "tool": "",
+        "latency_ms": 0,
+        "detail": detail,
     }

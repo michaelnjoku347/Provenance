@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-CREDIBLE = (
+# Tier 1: wire services and major national or business outlets.
+TIER1 = (
     "reuters.com",
     "apnews.com",
     "ap.org",
+    "afp.com",
     "bbc.com",
     "bbc.co.uk",
     "nytimes.com",
@@ -17,20 +19,104 @@ CREDIBLE = (
     "npr.org",
     "bloomberg.com",
     "wsj.com",
+    "ft.com",
+    "economist.com",
+    "forbes.com",
+    "cnbc.com",
+    "fortune.com",
+    "barrons.com",
+    "marketwatch.com",
+    "businessinsider.com",
     "aljazeera.com",
     "abcnews.go.com",
     "cbsnews.com",
     "nbcnews.com",
     "pbs.org",
+    "cnn.com",
     "politico.com",
     "axios.com",
     "france24.com",
     "dw.com",
     "theatlantic.com",
     "time.com",
-    "ft.com",
     "cbc.ca",
+    "usatoday.com",
+    "latimes.com",
+    "chicagotribune.com",
+    "theglobeandmail.com",
+    "abc.net.au",
+    "independent.co.uk",
+    "telegraph.co.uk",
+    "scmp.com",
+    "japantimes.co.jp",
+    "lemonde.fr",
+    "spiegel.de",
+    "corriere.it",
+    "ilsole24ore.com",
+    "economictimes.indiatimes.com",
+    "thehindu.com",
+    "hindustantimes.com",
+    "indianexpress.com",
+    "ndtv.com",
 )
+
+# Tier 2: established magazines and regional papers.
+TIER2 = (
+    "wired.com",
+    "theverge.com",
+    "arstechnica.com",
+    "techcrunch.com",
+    "newyorker.com",
+    "newsweek.com",
+    "vanityfair.com",
+    "rollingstone.com",
+    "people.com",
+    "nationalgeographic.com",
+    "nature.com",
+    "science.org",
+    "scientificamerican.com",
+    "mensjournal.com",
+    "esquire.com",
+    "gq.com",
+    "vogue.com",
+    "fastcompany.com",
+    "inc.com",
+    "thehill.com",
+    "vox.com",
+    "slate.com",
+    "yahoo.com",
+    "oregonlive.com",
+    "seattletimes.com",
+    "bostonglobe.com",
+    "sfchronicle.com",
+    "mercurynews.com",
+    "dallasnews.com",
+    "houstonchronicle.com",
+    "startribune.com",
+    "denverpost.com",
+    "miamiherald.com",
+    "americanbazaaronline.com",
+    "readtheprofile.com",
+)
+
+# Gossip and tabloid sites. A hit here is a rumor, not a finding.
+RUMOR = (
+    "celebitchy.com",
+    "tmz.com",
+    "radaronline.com",
+    "perezhilton.com",
+    "hollywoodlife.com",
+    "justjared.com",
+    "eonline.com",
+    "pagesix.com",
+    "dailymail.co.uk",
+    "thesun.co.uk",
+    "nationalenquirer.com",
+    "okmagazine.com",
+    "usmagazine.com",
+)
+
+CREDIBLE = TIER1 + TIER2
 
 FACTCHECK = (
     "snopes.com",
@@ -105,9 +191,28 @@ def host_of(url: str) -> str:
     return host
 
 
-def is_credible(url: str) -> bool:
+def _matches(host: str, domains: tuple[str, ...]) -> bool:
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
+def is_rumor(url: str) -> bool:
+    return _matches(host_of(url), RUMOR)
+
+
+def tier(url: str) -> int:
+    """1 for wires and major outlets, 2 for established magazines and regional papers, else 0."""
     host = host_of(url)
-    return any(host == domain or host.endswith("." + domain) for domain in CREDIBLE + FACTCHECK)
+    if _matches(host, RUMOR):
+        return 0
+    if _matches(host, TIER1):
+        return 1
+    if _matches(host, TIER2) or _matches(host, FACTCHECK):
+        return 2
+    return 0
+
+
+def is_credible(url: str) -> bool:
+    return tier(url) > 0
 
 
 def _tone(text: str) -> str:
