@@ -167,6 +167,7 @@ def describe(image_url: str, image: bytes, media_type: str, caption: str) -> dic
             return {
                 "status": "ok",
                 "text": text[:800],
+                "what": str((claim or {}).get("what") or "")[:160],
                 "provider": "Gemini" if config.key("GEMINI_API_KEY") and not config.key("OPENAI_API_KEY") else "OpenAI",
                 "tool": "",
                 "latency_ms": _ms(started),

@@ -88,11 +88,10 @@ def _openai(data: bytes, media_type: str, caption: str) -> dict:
 
 
 def _gemini(data: bytes, media_type: str, caption: str) -> dict:
-    model = config.gemini_model()
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={config.key('GEMINI_API_KEY')}"
-    )
+    models = []
+    for name in [config.gemini_model(), "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash-lite"]:
+        if name and name not in models:
+            models.append(name)
     payload = {
         "contents": [
             {
@@ -109,7 +108,12 @@ def _gemini(data: bytes, media_type: str, caption: str) -> dict:
         ],
         "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
     }
-    status, body = httputil.post_json(url, {}, payload, timeout=40)
+    status, body = 0, None
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        status, body = httputil.post_json(url, {"x-goog-api-key": config.key("GEMINI_API_KEY")}, payload, timeout=30)
+        if status == 200 and isinstance(body, dict):
+            break
     if status != 200 or not isinstance(body, dict):
         raise RuntimeError(f"Gemini returned HTTP {status}")
     parts = body["candidates"][0]["content"]["parts"]

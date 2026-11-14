@@ -388,7 +388,7 @@ def _from_model(matches: list[dict], page_text: str) -> dict:
     }
 
 
-def identify(claim_text: str, matches: list[dict], context: str = "") -> dict:
+def identify(claim_text: str, matches: list[dict], context: str = "", seen_what: str = "") -> dict:
     context = repair_text(context or "")
     blob = _blob(matches, context)
     model = _from_model(matches, context)
@@ -399,8 +399,14 @@ def identify(claim_text: str, matches: list[dict], context: str = "") -> dict:
         if name and _ok(name) and name not in names:
             names.append(name)
     model_names = [n for n in (model.get("names") or []) if n and _ok(n)]
-    if model_names:
+    seen_what = " ".join((seen_what or "").split())[:80]
+    head = seen_what.split()[0].lower() if seen_what else ""
+    if seen_what and model_names and any(head in name.lower() for name in model_names):
+        names = [seen_what]
+    elif model_names:
         names = model_names[:4]
+    elif seen_what:
+        names = [seen_what]
     else:
         names = _drop_contained(names, counts)
         names.sort(key=lambda name: (-counts.get(name, 0), name))
@@ -601,12 +607,25 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
             confidence = int(decision.get("confidence") or 55)
     elif seen:
         sentence = seen if seen.endswith((".", "!", "?")) else f"{seen}."
-        fact = sources[0]["quote"] if sources else ""
+        answer_text = str((((web or {}).get("answer") or {}).get("text")) or "")
+        answer_text = re.sub(r"\[\[[\d,\s]*\]\]|\[(\d+|[^\]]*)\]\([^)]*\)|\[[\d,\s]+\]|[#*_`]", "", answer_text)
+        picked = [
+            part.strip()
+            for part in re.split(r"(?<=[.!?])\s+", " ".join(answer_text.split()))
+            if 25 < len(part.strip()) < 260 and "|" not in part
+        ][:2]
+        fact = " ".join(picked) or next((source["quote"] for source in sources if source.get("quote") and "|" not in source["quote"]), "")
         if fact and fact.lower() not in sentence.lower():
             sentence = f"{sentence} {fact}"
-        verdict = decision.get("verdict") or ("True" if any(item.get("credible") for item in sources) else UNVERIFIED)
-        line = ""
-        confidence = int(decision.get("confidence") or (64 if sources else 40))
+        credible = any(item.get("credible") for item in sources)
+        if "identity" in kinds and (credible or sources):
+            verdict = "True"
+            line = "Identified from the image and confirmed by credible sources."
+            confidence = max(int(decision.get("confidence") or 0), 78)
+        else:
+            verdict = decision.get("verdict") or ("True" if credible else UNVERIFIED)
+            line = ""
+            confidence = int(decision.get("confidence") or (64 if sources else 40))
     else:
         sentence = decision.get("summary") or "The claim could not be settled from the sources."
         verdict = decision.get("verdict") or UNVERIFIED

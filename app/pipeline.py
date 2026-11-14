@@ -204,7 +204,7 @@ def iter_run(
     claim_text = (claim_text or "").strip()[:2000]
     image_url = (image_url or "").strip()
     image_from_url = False
-    if not image and links.is_direct_image(image_url):
+    if not image and image_url.startswith("http") and not links.is_status_url(image_url):
         fetched, fetched_type = _download_image(image_url)
         if fetched:
             image = fetched
@@ -221,7 +221,7 @@ def iter_run(
         return
 
     link: dict = {}
-    if image_url.startswith("http") and not links.is_direct_image(image_url):
+    if image_url.startswith("http") and not links.is_direct_image(image_url) and not image_from_url:
         yield _stage("link", "running", "Reading the link", "X posts and article pages can supply the claim.")
         try:
             link = links.resolve(image_url)
@@ -296,7 +296,7 @@ def iter_run(
     claim = {
         "text": claim_text,
         "who": "",
-        "what": "",
+        "what": seen.get("what") or "",
         "where": "",
         "when": "",
         "search_query": (seen.get("text") or claim_text or "")[:300],
@@ -354,7 +354,7 @@ def iter_run(
         context = ""
         if image_url.startswith("http") and not links.is_direct_image(image_url):
             context = ""
-        subject = questions.identify(claim.get("text") or claim_text, matches, f"{context} {claim.get('seen') or ''}")
+        subject = questions.identify(claim.get("text") or claim_text, matches, f"{context} {claim.get('seen') or ''}", claim.get("what") or "")
         if claim.get("seen"):
             subject["seen"] = claim["seen"]
     except Exception:

@@ -991,7 +991,7 @@ def test_gemini_reads_the_image_when_treg_has_no_vision_tool(client, monkeypatch
 
     def fake_post(url, headers, payload, timeout=30.0):
         assert "generativelanguage.googleapis.com" in url
-        assert "key=gemini-test" in url
+        assert headers.get("x-goog-api-key") == "gemini-test"
         return 200, {
             "candidates": [
                 {
