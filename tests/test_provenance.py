@@ -1335,3 +1335,69 @@ def test_stream_includes_first_headline_before_the_receipt(client, monkeypatch):
     head = raw.split("event: result", 1)[0]
     assert "First headline from Treg" in head
     assert "First source from Reuters" in head
+
+
+def test_iter_run_completes_with_stubbed_providers(monkeypatch):
+    """The check pool must be a public ThreadPoolExecutor. Python 3.15 dropped private fields the old subclass read."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app import pipeline
+
+    pool = pipeline._open_pool()
+    assert type(pool) is ThreadPoolExecutor
+    pool.shutdown(wait=False, cancel_futures=True)
+
+    monkeypatch.setattr(
+        "app.reverse_image.lookup",
+        lambda url: {"status": "skipped", "detail": "stub", "matches": [], "latency_ms": 0, "tool": "", "knowledge_title": ""},
+    )
+    monkeypatch.setattr(
+        "app.see.describe",
+        lambda *args, **kwargs: {"status": "skipped", "text": "", "what": "", "provider": "", "detail": "stub", "latency_ms": 0},
+    )
+    monkeypatch.setattr(
+        "app.treg.news",
+        lambda query: {
+            "status": "ok",
+            "detail": "1 results via Treg News.",
+            "hits": [{"url": "https://apnews.com/city", "title": "City hall headline", "excerpt": "A crowd.", "page_age": "", "found_by": "Treg News"}],
+            "latency_ms": 1,
+            "results": 1,
+        },
+    )
+    monkeypatch.setattr(
+        "app.treg.web",
+        lambda query: {"status": "ok", "detail": "0 results via Treg Web.", "hits": [], "latency_ms": 1, "results": 0},
+    )
+    monkeypatch.setattr(
+        "app.treg.profile",
+        lambda username: {"status": "skipped", "detail": "", "latency_ms": 0, "profile": {}, "results": 0},
+    )
+    monkeypatch.setattr(
+        "app.treg.comments",
+        lambda tweet_id, url="": {"status": "skipped", "detail": "", "latency_ms": 0, "replies": [], "results": 0},
+    )
+
+    def investigate(query, questions=None):
+        yield "search", {
+            "status": "ok",
+            "detail": "1 results.",
+            "hits": [{"url": "https://www.reuters.com/city", "title": "Reuters", "excerpt": "Reported a crowd.", "found_by": "You.com Search"}],
+            "knowledge": "",
+            "latency_ms": 1,
+        }
+        yield "contents", {"status": "skipped", "detail": "", "pages": [], "latency_ms": 0}
+        yield "answer", {"status": "ok", "detail": "Answer API.", "text": "Outlets reported the crowd.", "citations": [], "kind": "answer", "latency_ms": 1}
+
+    monkeypatch.setattr("app.youcom.iter_investigate", investigate)
+    events = list(
+        pipeline.iter_run(
+            image=b"",
+            media_type="image/jpeg",
+            claim_text="A crowd gathered outside city hall this morning.",
+        )
+    )
+    result = next(event["data"] for event in events if event["event"] == "result")
+    assert result["verdict"]
+    assert result["receipt_id"]
+    assert any(source["title"] == "City hall headline" for source in result["sources"])
