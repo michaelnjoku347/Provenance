@@ -43,6 +43,95 @@ def test_health_and_homepage(client):
     assert body["keys"]["xdc_ai"] is False
 
 
+def test_youcom_stance_json_sets_the_verdict_and_source_labels(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [
+                {"url": "https://www.reuters.com/gta", "title": "Rockstar dates GTA 6", "contents": {"highlights": ["GTA 6 is scheduled for November 19, 2026."]}},
+                {"url": "https://www.bbc.com/gta", "title": "GTA 6 release", "contents": {"highlights": ["November 19, 2026."]}},
+            ]}}
+        if url.endswith("/v1/contents"):
+            return 200, []
+        if url.endswith("/v1/answer"):
+            query = payload.get("query") or ""
+            assert len(query) <= 400
+            if "judge the claim" in query.lower() or '"stance"' in query:
+                return 200, {"answer": '{"stance":"supports","answer":"GTA 6 is scheduled for November 19, 2026, per Rockstar.","evidence":[{"url":"https://www.reuters.com/gta","quote":"scheduled for November 19, 2026","stance":"supports"},{"url":"https://www.bbc.com/gta","quote":"November 19, 2026","stance":"supports"}]}'}
+            return 200, {"answer": "GTA 6 is scheduled for November 19, 2026, per Rockstar.", "citations": []}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    body = client.post("/api/check", json={"claim": "GTA 6 is coming November 19, 2026."}).json()
+    assert body["verdict"] == "True"
+    assert body["claim"]["stance"] == "supports"
+    assert "November 19, 2026" in body["summary"]
+    labeled = {source["url"]: source.get("stance") for source in body["sources"]}
+    assert labeled["https://www.reuters.com/gta"] == "supports"
+    assert body["confidence_reasons"]
+    assert 20 <= body["confidence"] <= 95
+
+
+def test_named_relationship_uses_the_stance_step():
+    from app.questions import compose
+
+    claim = {"text": "Are Jensen Huang and Lori Huang divorced?", "stance": "insufficient"}
+    decision = {
+        "verdict": "Unverified",
+        "confidence": 41,
+        "summary": "No outlet reports a filing.",
+        "claim": claim,
+        "contributions": [],
+    }
+    web = {
+        "search": {"hits": [{"url": "https://www.forbes.com/huang", "title": "Jensen Huang", "excerpt": "CEO"}]},
+        "contents": {"pages": []},
+        "answer": {"text": ""},
+    }
+    subject = {
+        "questions": [{"kind": "relationship", "text": "Are they divorced?"}],
+        "names": ["Jensen Huang", "Lori Huang"],
+        "role": "Nvidia CEO",
+        "relation": "wife",
+    }
+    answer = compose(claim["text"], decision, web, {}, subject)
+    assert answer["verdict"] == "Unverified"
+    assert answer["text"] == "No outlet reports a filing."
+    assert "likely false" not in answer["line"].lower()
+
+    claim["stance"] = "contradicts"
+    decision["verdict"] = "False"
+    decision["summary"] = "A court filing says they divorced."
+    answer = compose(claim["text"], decision, web, {}, subject)
+    assert answer["verdict"] == "False"
+    assert answer["text"] == "A court filing says they divorced."
+
+
+def test_relationship_question_uses_stance_and_absence_stays_unverified(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": []}}
+        if url.endswith("/v1/contents"):
+            return 200, []
+        if url.endswith("/v1/answer"):
+            query = payload.get("query") or ""
+            if "Judge the claim" in query:
+                return 200, {"answer": '{"stance":"insufficient","answer":"No credible outlet reports that they are divorced.","evidence":[]}'}
+            return 200, {"answer": "No filing is on record.", "citations": []}
+        if "research" in url:
+            return 200, {"output": {"content": "Noted.", "sources": []}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    body = client.post("/api/check", json={"claim": "Did these two people get divorced?"}).json()
+    assert body["verdict"] == "Unverified"
+    assert "no credible outlet reports" in body["summary"].lower()
+    assert "likely false" not in body["summary"].lower()
+
+
 def test_treg_news_can_lead_the_receipts():
     from app.questions import compose
 
@@ -734,7 +823,7 @@ def test_image_question_uses_treg_names_then_youcom(client, monkeypatch):
     assert "Lori" in body["answer"]["text"]
     assert "no credible reports they are divorced" in body["answer"]["text"].lower()
     assert "No credible evidence they are divorced" in body["answer"]["line"]
-    assert body["answer"]["verdict"] == "False"
+    assert body["answer"]["verdict"] == "Unverified"
     assert len(body["answer"]["why"]) <= 3
     assert 1 <= len(body["answer"]["sources"]) <= 3
     assert body["answer"]["sources"][0]["domain"] in {"reuters.com", "bbc.com"}

@@ -215,6 +215,52 @@ def is_credible(url: str) -> bool:
     return tier(url) > 0
 
 
+def confidence_from_evidence(hits: list[dict], stance: str, claim_text: str) -> tuple[int, list[str]]:
+    """20-95 from how many credible outlets agree, their tier, and whether the claim is time-sensitive."""
+    stance = (stance or "").lower()
+    buckets: dict[str, dict] = {}
+    for hit in hits or []:
+        url = hit.get("url") or ""
+        if not url or is_rumor(url):
+            continue
+        level = tier(url)
+        if level == 0:
+            continue
+        label = str(hit.get("stance") or "").lower()
+        if not label and stance == "supports":
+            label = "supports"
+        host = host_of(url)
+        current = buckets.setdefault(host, {"tier": level, "stance": label})
+        if label in {"supports", "contradicts"}:
+            current["stance"] = label
+        current["tier"] = min(current["tier"], level)
+    agree_1 = [host for host, row in buckets.items() if row["stance"] == "supports" and row["tier"] == 1]
+    agree_2 = [host for host, row in buckets.items() if row["stance"] == "supports" and row["tier"] == 2]
+    disagree = [host for host, row in buckets.items() if row["stance"] == "contradicts"]
+    reasons: list[str] = []
+    if agree_1:
+        reasons.append(f"{len(agree_1)} tier-1 outlet{'s' if len(agree_1) != 1 else ''} agree")
+    elif agree_2:
+        reasons.append(f"{len(agree_2)} tier-2 outlet{'s' if len(agree_2) != 1 else ''} agree")
+    if disagree:
+        reasons.append(f"{len(disagree)} source{'s' if len(disagree) != 1 else ''} disagree{'s' if len(disagree) == 1 else ''}")
+    score = 32 + min(50, len(agree_1) * 16) + min(16, len(agree_2) * 8) - min(28, len(disagree) * 12)
+    if stance in {"insufficient", ""} and not agree_1 and not agree_2:
+        score = min(score, 40)
+        reasons.append("Not enough reporting")
+    elif stance == "mixed":
+        score = min(score, 58)
+        reasons.append("Sources do not agree")
+    if _recent_claim(claim_text):
+        dated = [hit for hit in hits or [] if hit.get("page_age")]
+        if dated and all(str(hit.get("page_age") or "")[:4].isdigit() and int(str(hit.get("page_age"))[:4]) < 2024 for hit in dated):
+            score -= 12
+            reasons.append("Sources are not current")
+    if not reasons:
+        reasons.append("Thin evidence")
+    return max(20, min(95, int(score))), reasons[:4]
+
+
 def _tone(text: str) -> str:
     lowered = (text or "").lower()
     if any(phrase in lowered for phrase in FAKE_PHRASES):
@@ -375,17 +421,39 @@ def decide(
                 }
             )
 
+    stance_result = {}
+    try:
+        from app.youcom import judge_stance
+
+        stance_result = judge_stance(text, hits) or {}
+    except Exception:
+        stance_result = {}
+    by_url = {item.get("url"): item.get("stance") for item in stance_result.get("evidence") or [] if item.get("url")}
+    if by_url:
+        for hit in hits:
+            if hit.get("url") in by_url:
+                hit["stance"] = by_url[hit["url"]]
+
     fake_hits = []
     ooc_hits = []
     support_hits = []
+    used_stance = stance_result.get("stance") in {"supports", "contradicts", "mixed", "insufficient"}
     for hit in hits:
         blob = f"{hit.get('title', '')} {hit.get('excerpt', '')}"
         tone = _tone(blob)
-        if tone == "fake":
+        labeled = str(hit.get("stance") or "").lower()
+        if used_stance and labeled == "contradicts":
+            fake_hits.append(hit)
+        elif used_stance and labeled in {"mixed", "insufficient"}:
+            continue
+        elif used_stance and labeled == "supports":
+            if is_credible(hit["url"]):
+                support_hits.append(hit)
+        elif tone == "fake":
             fake_hits.append(hit)
         elif tone == "ooc":
             ooc_hits.append(hit)
-        elif is_credible(hit["url"]):
+        elif not used_stance and is_credible(hit["url"]):
             support_hits.append(hit)
 
     if fake_hits:
@@ -486,6 +554,25 @@ def decide(
         if source_count == 0 and verdict == TRUE:
             confidence -= 8
         confidence = int(max(38, min(90, confidence)))
+    confidence_reasons = []
+    if used_stance:
+        mapped = {
+            "supports": TRUE,
+            "contradicts": FALSE,
+            "mixed": MISLEADING,
+            "insufficient": UNVERIFIED,
+        }[stance_result["stance"]]
+        if not (strong_date_conflict and fake < 38):
+            verdict = mapped
+        confidence, confidence_reasons = confidence_from_evidence(hits, stance_result["stance"], text)
+        if stance_result.get("answer"):
+            summary_override = stance_result["answer"]
+        else:
+            summary_override = ""
+        if isinstance(claim, dict):
+            claim["stance"] = stance_result["stance"]
+    else:
+        summary_override = ""
 
     clues = _build_clues(
         claim,
@@ -506,7 +593,9 @@ def decide(
     return {
         "verdict": verdict,
         "confidence": confidence,
-        "summary": SUMMARIES[verdict],
+        "summary": summary_override or SUMMARIES[verdict],
+        "confidence_reasons": confidence_reasons,
+        "stance": stance_result.get("stance") or "",
         "scores": scores,
         "contributions": contributions,
         "clues": clues[:4],
@@ -718,6 +807,7 @@ def _sources(hits: list[dict], matches: list[dict]) -> list[dict]:
                 "page_age": hit.get("page_age") or "",
                 "credible": is_credible(url) and host_of(url) not in FACTCHECK,
                 "found_by": hit.get("found_by") or "You.com Search",
+                "stance": hit.get("stance") or "",
             }
         )
     for match in matches:
