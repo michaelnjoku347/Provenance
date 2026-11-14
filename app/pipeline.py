@@ -360,6 +360,11 @@ def iter_run(
             "detail": "Vision assist unavailable. The check continued.",
             "latency_ms": 0,
         }
+    assist_what = " ".join(str(assist.get("what") or "").split())[:80]
+    if assist_what and not (reverse.get("knowledge_title") or "").strip() and matches:
+        head = assist_what.split()[0].lower()
+        if any(head in str(m.get("title") or "").lower() for m in matches[:6]):
+            lens_name = assist_what
     if lens_name:
         seen_text = f"Identified by Treg Google Lens: {lens_name}"
     elif assist.get("text"):
@@ -386,7 +391,7 @@ def iter_run(
         "what": assist.get("what") or "",
         "where": "",
         "when": "",
-        "search_query": (seen_text or claim_text or "")[:300],
+        "search_query": (lens_name or seen_text or claim_text or "")[:300],
         "source": "lens" if lens_name else ("vision" if seen_text else ("caption" if claim_text else "none")),
         "seen": seen_text,
     }

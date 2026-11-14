@@ -1026,7 +1026,7 @@ def test_treg_news_web_and_x_are_separate_rows(client, monkeypatch):
         if "treg.to/call/" in url:
             tool = url.rsplit("/", 1)[-1]
             seen["tools"].append(tool)
-            assert timeout <= 15
+            assert timeout <= 25
             if tool == "treg.google.serp.news":
                 return 200, {"output": {"results": [{"title": "Fortune on Jensen Huang", "link": "https://fortune.com/huang", "published_at": "2026-11-14T09:37:00Z", "source": "Fortune"}]}}
             if tool == "treg.google.serp.organic":

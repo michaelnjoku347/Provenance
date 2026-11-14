@@ -8,7 +8,7 @@ import time
 
 from app import config, httputil, sponsors
 
-_TIMEOUT = 15.0
+_TIMEOUT = 25.0
 _COMMENT_KEYS = ("tweet_id", "id", "status_id", "post_id", "conversation_id")
 
 
