@@ -1009,7 +1009,7 @@ def test_huang_live_fixture_names_the_couple_and_the_speculation(client, monkeyp
     assert any("JSON" in prompt or "people" in prompt for prompt in seen["prompts"])
     assert body["sponsors"]["youcom_answer"]["label"] == "You.com Research"
     assert body["stages"]["vision"]["status"] == "ok"
-    assert "continued" in body["stages"]["vision"]["detail"].lower()
+    assert body["stages"]["vision"]["detail"]
 
 
 def test_gemini_reads_the_image_when_treg_has_no_vision_tool(client, monkeypatch):

@@ -355,8 +355,6 @@ def iter_run(
         assist = assist_f.result()
     matches = reverse.get("matches") or []
     lens_name = (reverse.get("knowledge_title") or "").strip()
-    if not lens_name and matches:
-        lens_name = str(matches[0].get("title") or "").strip()
     rev_flags = [{"label": m.get("title") or m.get("url") or "Match", "tone": "neutral"} for m in matches[:3]]
     if lens_name:
         rev_flags = [{"label": lens_name[:80], "tone": "neutral"}] + rev_flags[:2]

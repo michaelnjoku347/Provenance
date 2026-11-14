@@ -608,7 +608,7 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
     elif seen:
         sentence = seen if seen.endswith((".", "!", "?")) else f"{seen}."
         answer_text = str((((web or {}).get("answer") or {}).get("text")) or "")
-        answer_text = re.sub(r"\[\[[\d,\s]*\]\]|\[(\d+|[^\]]*)\]\([^)]*\)|\[[\d,\s]+\]|[#*_`]", "", answer_text)
+        answer_text = re.sub(r"\s*\[page[^\]]*\]|\[\[[\d,\s]*\]\]|\[(\d+|[^\]]*)\]\([^)]*\)|\[[\d,\s]+\]|[#*_`]", "", answer_text)
         picked = [
             part.strip()
             for part in re.split(r"(?<=[.!?])\s+", " ".join(answer_text.split()))
