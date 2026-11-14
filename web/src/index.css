@@ -39,8 +39,24 @@ body {
 }
 
 input,
-textarea {
+textarea,
+select,
+button,
+a {
   outline: none;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible,
+.field:focus-visible,
+.sample-card:focus-visible,
+.btn-primary:focus-visible,
+.btn-ghost:focus-visible {
+  outline: 2px solid #c8f54a;
+  outline-offset: 3px;
 }
 
 @keyframes pulse-dot {
@@ -197,6 +213,159 @@ textarea {
   animation: fade-up 0.4s ease-out both;
 }
 
+.sample-card {
+  transform: translateY(0) rotate(0deg);
+  transition: transform 0.18s ease;
+}
+
+.sample-card:hover {
+  transform: translateY(-4px) rotate(-0.7deg);
+}
+
+.sample-card:nth-child(even):hover {
+  transform: translateY(-4px) rotate(0.7deg);
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, #ddff78 0%, #c8f54a 48%, #b4df32 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 8px 22px rgba(200, 245, 74, 0.2);
+  transform: translateY(0);
+  transition: transform 0.14s ease, opacity 0.14s ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-primary:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
+.btn-ghost {
+  transition: transform 0.14s ease, opacity 0.14s ease;
+}
+
+.btn-ghost:hover {
+  transform: translateY(-1px);
+}
+
+.btn-ghost:active {
+  transform: translateY(1px);
+}
+
+.field {
+  box-shadow: inset 0 0 0 1px transparent;
+}
+
+.field:focus {
+  border-color: rgba(200, 245, 74, 0.75);
+  box-shadow: 0 0 0 3px rgba(200, 245, 74, 0.16);
+}
+
+.dropzone {
+  position: relative;
+}
+
+.drop-sheen {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border: 1px dashed #c8f54a;
+  opacity: 0;
+  transform: scale(0.985);
+  pointer-events: none;
+}
+
+.dropzone-hot .drop-sheen {
+  opacity: 1;
+  transform: scale(1);
+  animation: drop-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes drop-pulse {
+  50% {
+    opacity: 0.4;
+    transform: scale(1.015);
+  }
+}
+
+.answer-line {
+  animation: fade-up 0.45s ease 0.12s both;
+}
+
+.why-in {
+  animation: fade-up 0.4s ease both;
+}
+
+.source-in {
+  animation: slide-in 0.42s ease both;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.chip-live {
+  animation: chip-pulse 1s ease-in-out infinite;
+}
+
+@keyframes chip-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.96);
+  }
+}
+
+.scan-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(200, 245, 74, 0.22) 50%, transparent 70%);
+  transform: translateX(-120%);
+  animation: shimmer 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+details.fold > .fold-body {
+  display: grid !important;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.32s ease, opacity 0.32s ease;
+}
+
+details.fold[open] > .fold-body {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.fold-body > .fold-inner {
+  overflow: hidden;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .stamp,
   .flag-in,
@@ -205,7 +374,25 @@ textarea {
   .scanline,
   .chip-live,
   .fly-in,
-  .desk-root {
+  .desk-root,
+  .answer-line,
+  .why-in,
+  .source-in,
+  .scan-shimmer,
+  .drop-sheen,
+  .sample-card,
+  .btn-primary,
+  .btn-ghost,
+  details.fold > .fold-body {
     animation: none;
+    transition: none;
+  }
+
+  .sample-card:hover,
+  .btn-primary:hover:not(:disabled),
+  .btn-primary:active:not(:disabled),
+  .btn-ghost:hover,
+  .btn-ghost:active {
+    transform: none;
   }
 }

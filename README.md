@@ -47,11 +47,7 @@ cp .env.example .env
 uvicorn app.main:app --port 8000
 ```
 
-Open http://127.0.0.1:8000 and click the three samples:
-
-1. **City hall, this morning** — a same-day claim. Stays **Unverified** until You.com can see reporting, then **True** when credible sources agree.
-2. **Relief-bill claim** — the file names a generative tool. That is only a weak clue, so without sources the claim stays **Unverified**.
-3. **Flooding, claimed as this morning** — the file date is 2011. **Misleading or Out of Context**.
+Open http://127.0.0.1:8000 and click a real sample. The cards are a Tesla photo, the Huang photo, a Reuters post on X, and a Reuters fact-check article. Verdicts are left blank until a live check fills them.
 
 You can also paste an `x.com` or `twitter.com` status URL, or an article URL, with no image. The post text becomes the claim, and the post date is used when the claim says something is happening now.
 

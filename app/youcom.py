@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from app import config, httputil, sponsors
+from app.textutil import repair_text
 
 SEARCH_URL = "https://ydc-index.io/v1/search"
 CONTENTS_URL = "https://ydc-index.io/v1/contents"
 ANSWER_URL = "https://api.you.com/v1/answer"
 RESEARCH_URL = "https://api.you.com/v1/research"
+ANSWER_MAX = 380
 
 
 def _headers() -> dict:
@@ -28,7 +31,7 @@ def _excerpt(item: dict) -> str:
     text = " ".join(str(part) for part in parts[:3] if part)
     if not text:
         text = str(item.get("description") or "")
-    return " ".join(text.split())[:700]
+    return repair_text(" ".join(text.split())[:700])
 
 
 def _hit(item: dict, bucket: str) -> dict | None:
@@ -37,7 +40,7 @@ def _hit(item: dict, bucket: str) -> dict | None:
     url = str(item.get("url") or item.get("source") or "").strip()
     if not url.startswith("http"):
         return None
-    title = str(item.get("title") or urlparse(url).netloc or "Source").strip()
+    title = repair_text(str(item.get("title") or urlparse(url).netloc or "Source").strip())
     return {
         "url": url,
         "title": title[:180],
@@ -66,16 +69,20 @@ def _ms(started: float) -> int:
 
 
 def _search(query: str) -> dict:
+    from app.verdict import _recent_claim
+
     started = time.perf_counter()
     payload = {
         "query": query,
         "count": 10,
         "extraction": {"extraction_mode": "highlights"},
         "knowledge": "core",
-        "freshness": "week",
     }
+    if _recent_claim(query):
+        payload["freshness"] = "week"
     status, body = httputil.post_json(SEARCH_URL, _headers(), payload, timeout=25)
-    if status >= 400:
+    hits = _parse_search(body) if status == 200 and isinstance(body, dict) else []
+    if status >= 400 or (payload.get("freshness") and not hits):
         payload.pop("freshness", None)
         status, body = httputil.post_json(SEARCH_URL, _headers(), payload, timeout=25)
     if status != 200 or not isinstance(body, dict):
@@ -99,30 +106,44 @@ def _search(query: str) -> dict:
     }
 
 
-def _parse_pages(body: dict) -> list[dict]:
+def _page_rows(body) -> list:
+    """Contents returns a top-level list. Older payloads used a results object."""
+    if isinstance(body, list):
+        return body
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            return []
+        return _page_rows(body)
     if not isinstance(body, dict):
         return []
-    rows = body.get("results") or body.get("data") or body.get("contents") or []
+    rows = body.get("results")
+    if rows is None:
+        rows = body.get("data") or body.get("contents") or []
     if isinstance(rows, dict):
         rows = list(rows.values())
+    return rows if isinstance(rows, list) else []
+
+
+def _parse_pages(body) -> list[dict]:
     pages = []
-    if not isinstance(rows, list):
-        return pages
-    for row in rows:
+    for row in _page_rows(body):
         if not isinstance(row, dict):
             continue
-        markdown = row.get("markdown") or ""
+        markdown = row.get("markdown") or row.get("html") or ""
         if isinstance(markdown, dict):
             markdown = markdown.get("content") or markdown.get("text") or ""
         meta = row.get("metadata") or {}
         if not isinstance(meta, dict):
             meta = {}
         text = str(markdown or meta.get("description") or "")
+        title = row.get("title") or meta.get("title") or meta.get("ogTitle") or ""
         pages.append(
             {
                 "url": str(row.get("url") or ""),
-                "title": str(meta.get("title") or meta.get("ogTitle") or "")[:180],
-                "excerpt": " ".join(text.split())[:700],
+                "title": repair_text(str(title))[:180],
+                "excerpt": repair_text(" ".join(text.split())[:700]),
             }
         )
     return pages
@@ -142,65 +163,113 @@ def _contents(urls: list[str]) -> dict:
     payload = {"urls": urls[:3], "formats": ["markdown", "metadata"]}
     status, body = httputil.post_json(CONTENTS_URL, _headers(), payload, timeout=25)
     elapsed = _ms(started)
-    if status != 200 or not isinstance(body, dict):
+    pages = _parse_pages(body) if status == 200 else []
+    if status != 200 or (not pages and not isinstance(body, (dict, list))):
         sponsors.record("youcom_contents", called=True, latency_ms=elapsed, pages=0, status="error")
         return {"status": "error", "detail": f"You.com contents returned HTTP {status}.", "pages": [], "latency_ms": elapsed}
-    pages = _parse_pages(body)
     sponsors.record("youcom_contents", called=True, latency_ms=elapsed, pages=len(pages), status="ok")
     return {"status": "ok", "detail": f"Read {len(pages)} pages.", "pages": pages, "latency_ms": elapsed}
 
 
-def _answer(query: str) -> dict:
-    started = time.perf_counter()
-    question = (
-        "Is this claim true, false, or misleading based on credible reporting? "
-        "Note if the timing or the context does not match. Cite sources. "
-        f"Claim: {query}"
-    )[:1500]
-    if config.flag("YDC_USE_RESEARCH"):
+def _clip_query(text: str, limit: int = ANSWER_MAX) -> str:
+    """Answer rejects any query over 400 characters."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit]
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return clipped or text[:limit]
+
+
+def _research_body(body) -> tuple[str, list]:
+    output = body.get("output") if isinstance(body, dict) else None
+    if not isinstance(output, dict):
+        return "", []
+    content = output.get("content") if isinstance(output.get("content"), str) else ""
+    citations = []
+    for source in output.get("sources") or []:
+        if not isinstance(source, dict) or not source.get("url"):
+            continue
+        snippets = source.get("snippets")
+        excerpt = " ".join(snippets)[:400] if isinstance(snippets, list) else str(source.get("snippet") or "")[:400]
+        citations.append({"url": source["url"], "title": source.get("title") or "", "excerpt": excerpt})
+    return repair_text(content), citations
+
+
+def _research(prompt: str) -> dict:
+    """Research lite accepts a long input. Answer does not."""
+    try:
         status, body = httputil.post_json(
             RESEARCH_URL,
             _headers(),
-            {"input": question, "research_effort": "lite"},
-            timeout=25,
+            {"input": (prompt or "")[:6000], "research_effort": "lite"},
+            timeout=40,
         )
-        elapsed = _ms(started)
-        if status != 200 or not isinstance(body, dict):
-            sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=0, status="error")
-            return {
-                "status": "error",
-                "detail": f"You.com research returned HTTP {status}.",
-                "text": "",
-                "citations": [],
-                "kind": "research",
-                "latency_ms": elapsed,
-            }
-        output = body.get("output") or {}
-        content = output.get("content") if isinstance(output, dict) else ""
-        if not isinstance(content, str):
-            content = ""
-        citations = []
-        for source in (output.get("sources") or []) if isinstance(output, dict) else []:
-            if isinstance(source, dict) and source.get("url"):
-                citations.append(
-                    {
-                        "url": source["url"],
-                        "title": source.get("title") or "",
-                        "excerpt": " ".join(source.get("snippets") or [])[:400]
-                        if isinstance(source.get("snippets"), list)
-                        else str(source.get("snippet") or "")[:400],
-                    }
-                )
-        sponsors.record("youcom_answer", called=True, latency_ms=elapsed, citations=len(citations), status="ok")
+    except Exception:
+        return {"status": "error", "text": "", "citations": [], "kind": "research", "detail": "You.com research failed."}
+    if status != 200 or not isinstance(body, dict):
         return {
-            "status": "ok",
-            "detail": "Research API lite.",
-            "text": content[:1200],
-            "citations": citations,
+            "status": "error",
+            "text": "",
+            "citations": [],
             "kind": "research",
-            "latency_ms": elapsed,
+            "detail": f"You.com research returned HTTP {status}.",
         }
+    text, citations = _research_body(body)
+    return {
+        "status": "ok",
+        "text": text[:2000],
+        "citations": citations,
+        "kind": "research",
+        "detail": "Research API lite.",
+    }
 
+
+def ask(prompt: str) -> dict:
+    """Name who is shown. Research lite, because the titles do not fit in Answer."""
+    if not config.key("YDC_API_KEY") or not (prompt or "").strip():
+        return {"status": "skipped", "text": ""}
+    result = _research(prompt)
+    return {"status": result["status"], "text": result.get("text") or ""}
+
+
+def _answer(query: str, hits: list | None = None, questions: list | None = None) -> dict:
+    started = time.perf_counter()
+    if questions:
+        lines = []
+        for hit in (hits or [])[:8]:
+            lines.append(
+                f"- {hit.get('title') or ''} ({hit.get('url') or ''}): {(hit.get('excerpt') or '')[:360]}"
+            )
+        asked = "; ".join(str(item.get("text") or "") for item in questions if item.get("text"))
+        question = (
+            "Answer these questions from the retrieved sources only. "
+            "Say who or what is shown, then the key facts. "
+            "If a credible outlet only speculates about a divorce, say they are not reported divorced "
+            "and that there is no filing or announcement. Do not treat a rumor site as proof. "
+            f"Questions: {asked}\nSources:\n" + "\n".join(lines)
+        )[:6000]
+    else:
+        question = _clip_query(
+            "Is this claim true, false, or misleading based on credible reporting? "
+            "Note if the timing or the context does not match. Cite sources. "
+            f"Claim: {query}"
+        )
+    if questions or config.flag("YDC_USE_RESEARCH"):
+        result = _research(question)
+        elapsed = _ms(started)
+        result["latency_ms"] = elapsed
+        sponsors.record(
+            "youcom_answer",
+            called=True,
+            latency_ms=elapsed,
+            citations=len(result.get("citations") or []),
+            status=result["status"],
+        )
+        return result
+
+    question = _clip_query(question)
     status, body = httputil.post_json(
         ANSWER_URL,
         _headers(),
@@ -231,7 +300,7 @@ def _answer(query: str) -> dict:
     return {
         "status": "ok",
         "detail": "Answer API.",
-        "text": str(body.get("answer") or "")[:1200],
+        "text": repair_text(str(body.get("answer") or "")[:1200]),
         "citations": citations,
         "kind": "answer",
         "latency_ms": elapsed,
@@ -251,7 +320,7 @@ def _merge_pages(hits: list[dict], pages: list[dict]) -> None:
             hit["title"] = page["title"]
 
 
-def iter_investigate(query: str):
+def iter_investigate(query: str, questions: list | None = None):
     empty_search = {"status": "skipped", "detail": "", "hits": [], "knowledge": ""}
     empty_contents = {"status": "skipped", "detail": "", "pages": []}
     empty_answer = {"status": "skipped", "detail": "", "text": "", "citations": [], "kind": "answer"}
@@ -289,7 +358,7 @@ def iter_investigate(query: str):
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             contents_f = pool.submit(_contents, urls[:3])
-            answer_f = pool.submit(_answer, query)
+            answer_f = pool.submit(_answer, query, search.get("hits") or [], questions)
             contents = contents_f.result()
             answer = answer_f.result()
     except Exception:

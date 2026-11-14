@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Iterator
 
-from app import config, credentials, detector, explain, links, reverse_image, samples, sponsors, store, verdict, vision, youcom
+from concurrent.futures import ThreadPoolExecutor
+
+from app import config, credentials, detector, explain, httputil, links, questions, reverse_image, samples, see, sponsors, store, treg, verdict, youcom
 
 
 def _stage_error(name: str) -> dict:
@@ -32,7 +35,7 @@ def _cache_key(image: bytes, claim_text: str, image_url: str) -> str:
     digest.update(image_url.encode())
     digest.update(b"\0")
     digest.update(flags.encode())
-    digest.update(b"\0claim-v2")
+    digest.update(b"\0claim-v4")
     return digest.hexdigest()
 
 
@@ -98,7 +101,59 @@ def _link_card(link: dict) -> dict:
     }
 
 
-def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link=None) -> dict:
+def _download_image(image_url: str) -> tuple[bytes, str]:
+    """Fetch a public image so EXIF, vision, and the hash see the real bytes."""
+    try:
+        status, data, media = httputil.get_bytes(image_url, timeout=20)
+    except Exception:
+        return b"", ""
+    if status != 200 or not data or len(data) > 8_000_000:
+        return b"", ""
+    if data[:3] == b"\xff\xd8\xff":
+        media = "image/jpeg"
+    elif data[:8] == b"\x89PNG\r\n\x1a\n":
+        media = "image/png"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        media = "image/webp"
+    elif not media.startswith("image/"):
+        return b"", ""
+    return data, media or "image/jpeg"
+
+
+def _x_target(url: str) -> tuple[str, str]:
+    if not links.is_status_url(url):
+        return "", ""
+    parts = [part for part in urlparse_path(url).split("/") if part]
+    if len(parts) >= 3 and parts[1] == "status" and parts[2].isdigit() and parts[0].lower() not in {"i", "intent", "share"}:
+        return parts[0], parts[2]
+    return "", ""
+
+
+def urlparse_path(url: str) -> str:
+    from urllib.parse import urlparse
+
+    return urlparse(url).path
+
+
+def _safe_future(future):
+    if future is None:
+        return {"status": "skipped", "detail": "", "hits": [], "latency_ms": 0, "results": 0, "replies": [], "profile": {}}
+    try:
+        return future.result()
+    except Exception:
+        return {"status": "error", "detail": "Treg call failed. The check continued.", "hits": [], "latency_ms": 0, "results": 0, "replies": [], "profile": {}}
+
+
+def _stage_row(result: dict) -> dict:
+    return {
+        "status": result.get("status") or "skipped",
+        "detail": result.get("detail") or "",
+        "latency_ms": int(result.get("latency_ms") or 0),
+        "results": int(result.get("results") if result.get("results") is not None else len(result.get("hits") or result.get("replies") or [])),
+    }
+
+
+def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link=None, subject=None, image_from_url=False, treg_extra=None) -> dict:
     link = link or {}
     decision = verdict.decide(claim, creds, web, reverse, prior, posted_at=link.get("posted_at") or "")
     checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -121,7 +176,16 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
                 "detail": web["contents"].get("detail", ""),
             },
             "youcom_answer": {"status": web["answer"]["status"], "detail": web["answer"].get("detail", "")},
-            "reverse_image": {"status": reverse["status"], "detail": reverse.get("detail", "")},
+            "reverse_image": {
+                "status": reverse["status"],
+                "detail": reverse.get("detail", ""),
+                "latency_ms": int(reverse.get("latency_ms") or 0),
+                "results": len(reverse.get("matches") or []),
+            },
+            "treg_news": _stage_row((treg_extra or {}).get("news") or {}),
+            "treg_web": _stage_row((treg_extra or {}).get("web") or {}),
+            "treg_profile": _stage_row((treg_extra or {}).get("profile") or {}),
+            "treg_replies": _stage_row((treg_extra or {}).get("replies") or {}),
             "detector": {"status": prior["status"], "detail": prior["note"]},
         },
         "credentials": {
@@ -145,11 +209,13 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
         "image_sha256": hashlib.sha256(image).hexdigest(),
         "filename": filename,
         "demo_id": demo_id,
-        "mode": "demo" if demo_id else "upload",
+        "mode": "demo" if demo_id else ("url" if image_from_url else "upload"),
         "checked_at": checked_at,
         "receipt_id": cache_key[:12],
         "cache": {"hit": False, "key": cache_key[:12]},
         "sponsors": sponsors.receipt(web, reverse),
+        "poster": ((treg_extra or {}).get("profile") or {}).get("profile") or {},
+        "pushback": ((treg_extra or {}).get("replies") or {}).get("replies") or [],
     }
     if demo_id:
         result["preview_url"] = f"/api/demos/{demo_id}/image"
@@ -159,10 +225,40 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
         result["link"] = _link_card(link)
         result["stages"]["link"] = {"status": link.get("status") or "error", "detail": link.get("detail") or ""}
     explain.attach(result, image_url)
+    try:
+        answer = questions.compose(claim.get("text") or claim_text, result, web, reverse, subject or {})
+    except Exception:
+        answer = {}
+    if answer:
+        result["answer"] = answer
+        if (subject or {}).get("questions"):
+            result["verdict"] = answer["verdict"]
+            result["summary"] = answer["text"]
+            result["confidence"] = answer["confidence"]
     statuses = [stage["status"] for stage in result["stages"].values()]
     if "error" not in statuses:
         store.put(cache_key, result)
     return result
+
+
+_STOP_HEADS = {"the", "a", "an", "this", "these", "that", "those", "two", "they", "it", "people", "couple", "man", "woman", "image", "photo", "no", "not", "unknown"}
+_NAME_STOP = {"The", "This", "New", "Who", "What", "How", "Why", "CEO", "Nvidia", "NVIDIA", "Million", "Billion", "Settlement", "Divorce", "Gift", "State", "He", "She", "Used", "Service", "Repair", "Near", "Sale", "For", "Are", "Is"}
+
+
+def _recurring_name(matches: list) -> str:
+    """A person-style name (two capitalised words) that shows up in 2+ Lens match titles."""
+    counts: dict = {}
+    for m in matches:
+        title = str(m.get("title") or "")
+        seen = set()
+        for a, b in re.findall(r"(?=\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b)", title):
+            if a in _NAME_STOP or b in _NAME_STOP:
+                continue
+            seen.add(f"{a} {b}")
+        for name in seen:
+            counts[name] = counts.get(name, 0) + 1
+    best = sorted(counts.items(), key=lambda kv: -kv[1])
+    return best[0][0] if best and best[0][1] >= 2 else ""
 
 
 def iter_run(
@@ -172,9 +268,19 @@ def iter_run(
     image_url: str = "",
     demo_id: str | None = None,
     filename: str = "",
+    photo_url: bool = False,
 ) -> Iterator[dict]:
     claim_text = (claim_text or "").strip()[:2000]
     image_url = (image_url or "").strip()
+    image_from_url = False
+    if not image and image_url.startswith("http") and not links.is_status_url(image_url):
+        fetched, fetched_type = _download_image(image_url)
+        if fetched:
+            image = fetched
+            media_type = fetched_type or media_type
+            image_from_url = True
+    if photo_url and image:
+        image_from_url = True
     cache_key = _cache_key(image, claim_text, image_url)
     cached = store.get(cache_key)
     if cached:
@@ -186,7 +292,7 @@ def iter_run(
         return
 
     link: dict = {}
-    if image_url.startswith("http") and not links.is_direct_image(image_url):
+    if image_url.startswith("http") and not links.is_direct_image(image_url) and not image_from_url:
         yield _stage("link", "running", "Reading the link", "X posts and article pages can supply the claim.")
         try:
             link = links.resolve(image_url)
@@ -228,32 +334,171 @@ def iter_run(
         [{"label": f"Weak prior {prior['score']:.2f}", "tone": "neutral"}],
     )
 
-    yield _stage("vision", "running", "Reading the claim", "Using the caption, or a vision model if one is configured.")
-    claim, vision_stage = vision.extract(image, media_type, claim_text)
-    if link.get("search_query") and vision_stage.get("status") != "ok":
+    reverse_url = image_url
+    if link.get("kind") == "status":
+        reverse_url = link.get("image_url") or ""
+    elif link.get("kind") == "article":
+        reverse_url = ""
+    yield _stage("reverse_image", "running", "Treg Lens", "Identifying the photo from visual matches.", sponsor="treg_lens")
+    yield _stage("vision", "running", "Gemini", "vision assist", sponsor="gemini")
+
+    def _lens():
+        if not reverse_url.startswith("http"):
+            return {
+                "status": "skipped",
+                "detail": "Reverse image needs a public image URL.",
+                "matches": [],
+                "tool": "",
+                "latency_ms": 0,
+                "knowledge_title": "",
+            }
+        try:
+            return reverse_image.lookup(reverse_url)
+        except Exception:
+            return {"status": "error", "detail": "Treg reverse-image request failed.", "matches": [], "tool": "", "latency_ms": 0, "knowledge_title": ""}
+
+    def _assist():
+        try:
+            return see.describe(image_url, image, media_type, claim_text)
+        except Exception:
+            return {
+                "status": "error",
+                "text": "",
+                "what": "",
+                "provider": "",
+                "detail": "Vision assist unavailable. The check continued.",
+                "latency_ms": 0,
+            }
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        lens_f = pool.submit(_lens)
+        assist_f = pool.submit(_assist)
+        reverse = lens_f.result()
+        assist = assist_f.result()
+    matches = reverse.get("matches") or []
+    lens_name = (reverse.get("knowledge_title") or "").strip()
+    rev_flags = [{"label": m.get("title") or m.get("url") or "Match", "tone": "neutral"} for m in matches[:3]]
+    if lens_name:
+        rev_flags = [{"label": lens_name[:80], "tone": "neutral"}] + rev_flags[:2]
+    if not matches and "add key" in (reverse.get("detail") or ""):
+        rev_flags = [{"label": "Treg: add key", "tone": "neutral"}]
+    yield _stage(
+        "reverse_image",
+        reverse.get("status") or "error",
+        "Treg Lens",
+        reverse.get("detail") or "Identified by Treg Google Lens.",
+        rev_flags,
+        sponsor="treg_lens",
+        stats={"latency_ms": int(reverse.get("latency_ms") or 0), "matches": len(matches)},
+    )
+
+    assist_what = " ".join(str(assist.get("what") or "").split())[:80]
+    if not lens_name and matches:
+        recurring = _recurring_name(matches[:8])
+        if recurring and assist_what and recurring.lower() in assist_what.lower():
+            lens_name = assist_what
+        elif recurring:
+            lens_name = recurring
+    if assist_what and not lens_name and matches:
+        head = assist_what.split()[0].lower()
+        if head not in _STOP_HEADS and len(head) > 2 and any(re.search(rf"\b{re.escape(head)}\b", str(m.get("title") or "").lower()) for m in matches[:6]):
+            lens_name = assist_what
+    if lens_name:
+        seen_text = f"Identified by Treg Google Lens: {lens_name}"
+    elif assist.get("text"):
+        seen_text = assist["text"]
+    else:
+        seen_text = ""
+        if matches:
+            try:
+                fallback = see.from_matches(matches, claim_text)
+            except Exception:
+                fallback = {}
+            if fallback.get("text"):
+                seen_text = fallback["text"]
+                assist = fallback
+    if assist.get("text") and lens_name and assist["text"] not in seen_text:
+        assist_note = "vision assist"
+    else:
+        assist_note = assist.get("detail") or ""
+    if "continued" not in (assist_note or "").lower() and not lens_name:
+        assist_note = ((assist_note or "Vision assist unavailable.") + " The check continued.").strip()
+    claim = {
+        "text": claim_text,
+        "who": "",
+        "what": assist.get("what") or "",
+        "where": "",
+        "when": "",
+        "search_query": (lens_name or seen_text or claim_text or "")[:300],
+        "source": "lens" if lens_name else ("vision" if seen_text else ("caption" if claim_text else "none")),
+        "seen": seen_text,
+    }
+    if link.get("search_query") and not seen_text:
         claim["search_query"] = str(link["search_query"])[:300]
-    yield _stage("vision", vision_stage["status"], "Read the claim", vision_stage.get("detail") or claim.get("text") or "", [{"label": (claim.get("text") or "No claim")[:80], "tone": "neutral"}])
+    vision_status = "ok" if assist.get("text") or lens_name else (assist.get("status") or "skipped")
+    vision_stage = {"status": vision_status, "detail": "vision assist" if assist.get("text") else (assist_note or "vision assist skipped")}
+    yield _stage(
+        "vision",
+        vision_stage["status"],
+        "Gemini" if assist.get("provider") in {"Gemini", "OpenAI"} else "Vision assist",
+        vision_stage["detail"],
+        [{"label": (assist.get("text") or seen_text or "Vision assist skipped")[:80], "tone": "neutral"}],
+        sponsor="gemini" if assist.get("provider") else "see",
+        stats={"latency_ms": int(assist.get("latency_ms") or 0), "provider": "vision assist" if assist.get("text") else (assist.get("provider") or "")},
+    )
 
     query = (claim.get("search_query") or claim.get("text") or "").strip()
     if query.lower().startswith("no caption"):
         query = ""
 
-    yield _stage("youcom_search", "running", "You.com Search", "Looking for reporting, fact-checks, and similar claims.", sponsor="youcom_search")
-    yield _stage("reverse_image", "running", "Treg reverse image", "Looks for where this image was first seen.", sponsor="treg")
+    subject = {}
+    try:
+        context = ""
+        if image_url.startswith("http") and not links.is_direct_image(image_url):
+            context = ""
+        subject = questions.identify(
+            claim.get("text") or claim_text,
+            matches,
+            f"{context} {claim.get('seen') or ''}",
+            claim.get("what") or "",
+            skip_model=bool(lens_name),
+        )
+        if claim.get("seen"):
+            subject["seen"] = claim["seen"]
+    except Exception:
+        subject = {}
+    if subject.get("query") and subject.get("questions"):
+        query = subject["query"]
+        claim["search_query"] = query
+
+    yield _stage("youcom_search", "running", "You.com Search", query or "Searching credible sources for the claim.", sponsor="prove")
+    yield _stage("treg_news", "running", "Treg News", "Fresh headlines for the same query.", sponsor="treg_news")
+    yield _stage("treg_web", "running", "Treg Web", "Cross-checking the open web.", sponsor="treg_web")
+
+    status_url = image_url if links.is_status_url(image_url) else (link.get("url") if links.is_status_url(link.get("url") or "") else "")
+    x_user, x_id = _x_target(status_url)
+    if x_user:
+        yield _stage("treg_profile", "running", "Treg X profile", f"@{x_user}", sponsor="treg_profile")
+    if x_id:
+        yield _stage("treg_replies", "running", "Treg X replies", "Reading replies for pushback.", sponsor="treg_replies")
 
     web = {"search": {}, "contents": {}, "answer": {}}
-    reverse = {"status": "error", "detail": "Reverse image failed.", "matches": [], "tool": ""}
+    treg_extra = {}
     try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            reverse_url = image_url
-            if link.get("kind") == "status":
-                reverse_url = link.get("image_url") or ""
-            elif link.get("kind") == "article":
-                reverse_url = ""
-            rev_f = pool.submit(reverse_image.lookup, reverse_url)
-            for name, data in youcom.iter_investigate(query):
-                web[name] = data
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            news_f = pool.submit(treg.news, query) if query else None
+            web_f = pool.submit(treg.web, query) if query else None
+            profile_f = pool.submit(treg.profile, x_user) if x_user else None
+            replies_f = pool.submit(treg.comments, x_id, status_url) if x_id else None
+            for name, data in youcom.iter_investigate(query, subject.get("questions") or None):
                 if name == "search":
+                    treg_extra["news"] = _safe_future(news_f)
+                    treg_extra["web"] = _safe_future(web_f)
+                    data["hits"] = treg.merge_hits(
+                        list(data.get("hits") or []),
+                        list(treg_extra["news"].get("hits") or []) + list(treg_extra["web"].get("hits") or []),
+                    )
+                    web[name] = data
                     yield _stage(
                         "youcom_search",
                         data["status"],
@@ -270,14 +515,16 @@ def iter_run(
                         "Pulling page text from the top results.",
                         sponsor="youcom_contents",
                     )
+                    synthesis = "You.com Research" if subject.get("questions") else "You.com Answer"
                     yield _stage(
                         "youcom_answer",
                         "running",
-                        "You.com Answer",
+                        synthesis,
                         "Asking You.com for a cited synthesis.",
                         sponsor="youcom_answer",
                     )
                 elif name == "contents":
+                    web[name] = data
                     yield _stage(
                         "youcom_contents",
                         data["status"],
@@ -287,57 +534,63 @@ def iter_run(
                         stats={"latency_ms": int(data.get("latency_ms") or 0), "pages": len(data.get("pages") or [])},
                     )
                 elif name == "answer":
+                    web[name] = data
+                    treg_extra["profile"] = _safe_future(profile_f)
+                    treg_extra["replies"] = _safe_future(replies_f)
                     flags = []
                     if data.get("text"):
                         flags.append({"label": data["text"][:80], "tone": "neutral"})
                     yield _stage(
                         "youcom_answer",
                         data["status"],
-                        "You.com Answer",
+                        "You.com Research" if data.get("kind") == "research" else "You.com Answer",
                         data.get("detail") or data.get("text") or "",
                         flags,
                         sponsor="youcom_answer",
                         stats={"latency_ms": int(data.get("latency_ms") or 0), "citations": len(data.get("citations") or [])},
                     )
-            reverse = rev_f.result()
     except Exception:
         web = {
             "search": {"status": "error", "detail": "You.com failed.", "hits": []},
             "contents": _stage_error("Contents"),
             "answer": {"status": "error", "detail": "Synthesis failed.", "text": "", "citations": []},
         }
-        reverse = {"status": "error", "detail": "Reverse image failed.", "matches": [], "tool": ""}
         yield _stage("youcom_search", "error", "Search failed", "You.com failed.")
         yield _stage("youcom_contents", "error", "Could not read sources", "Contents failed.")
         yield _stage("youcom_answer", "error", "Synthesis failed", "Answer failed.")
 
-    matches = reverse.get("matches") or []
-    rev_flags = [{"label": m.get("title") or m.get("url") or "Match", "tone": "neutral"} for m in matches[:3]]
-    if not matches and reverse.get("status") == "skipped" and "add key" in (reverse.get("detail") or ""):
-        rev_flags = [{"label": "Treg: add key", "tone": "neutral"}]
-    yield _stage(
-        "reverse_image",
-        reverse["status"],
-        "Treg reverse image",
-        reverse.get("detail") or "",
-        rev_flags,
-        sponsor="treg",
-        stats={"latency_ms": int(reverse.get("latency_ms") or 0), "matches": len(matches)},
-    )
+    for key, label, sponsor in (
+        ("news", "Treg News", "treg_news"),
+        ("web", "Treg Web", "treg_web"),
+        ("profile", "Treg X profile", "treg_profile"),
+        ("replies", "Treg X replies", "treg_replies"),
+    ):
+        row = treg_extra.get(key)
+        if not row:
+            continue
+        yield _stage(
+            sponsor,
+            row.get("status") or "skipped",
+            label,
+            row.get("detail") or "",
+            sponsor=sponsor,
+            stats={"latency_ms": int(row.get("latency_ms") or 0), "results": int(row.get("results") or len(row.get("hits") or row.get("replies") or []))},
+        )
+
     paywall = config.paywall_on()
     yield _stage(
         "x402",
-        "ok" if paywall else "skipped",
-        "XDC x402",
-        "Pay-per-verify is armed." if paywall else "Test mode. This desk check is not charged.",
-        [{"label": "Live" if paywall else "Test mode", "tone": "neutral"}],
+        "skipped",
+        "Paywall ready ($0.02 on XDC)",
+        "Paywall ready ($0.02 on XDC). This desk check is not a verified payment.",
+        [{"label": "Paywall ready" if paywall else "Test mode", "tone": "neutral"}],
         sponsor="x402",
         stats={"mode": "live" if paywall else "test", "price_usdc": sponsors.receipt({}, {}).get("x402", {}).get("price_usdc", "0.02")},
     )
 
     yield _stage("verdict", "running", "Judging the claim", "Comparing sources and dates with what the claim says.")
     result = _assemble(
-        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link
+        image, media_type, claim_text, image_url, demo_id, filename, cache_key, creds, prior, claim, vision_stage, web, reverse, link, subject, image_from_url, treg_extra
     )
     tone = "real" if result["verdict"] == "True" else "fake" if result["verdict"] == "False" else "verdict"
     yield _stage(
@@ -357,6 +610,7 @@ def run(
     image_url: str = "",
     demo_id: str | None = None,
     filename: str = "",
+    photo_url: bool = False,
 ) -> dict:
     final = None
     for ev in iter_run(
@@ -366,6 +620,7 @@ def run(
         image_url=image_url,
         demo_id=demo_id,
         filename=filename,
+        photo_url=photo_url,
     ):
         if ev["event"] == "result":
             final = ev["data"]
@@ -380,15 +635,20 @@ def _prepare_request(payload: dict) -> dict:
     media_type = payload.get("media_type") or "image/jpeg"
     filename = payload.get("filename") or ""
     claim = payload.get("claim") or ""
-    if demo_id and not image:
+    image_url = str(payload.get("image_url") or "").strip()
+    payload_photo = False
+    if demo_id:
         sample = samples.get(demo_id)
         if sample is None:
             raise ValueError("Unknown demo_id.")
-        image = sample["bytes"]
-        filename = filename or f"{demo_id}.jpg"
+        if not image and sample.get("attach", True) and sample.get("bytes"):
+            image = sample["bytes"]
+            filename = filename or f"{demo_id}.jpg"
         if not str(claim).strip():
             claim = sample["claim"]
-    image_url = str(payload.get("image_url") or "").strip()
+        if not image_url and sample.get("url"):
+            image_url = sample["url"]
+        payload_photo = bool(sample.get("attach") and sample.get("url") and image)
     if not image and not str(claim).strip() and not image_url:
         raise ValueError("Send a claim, a link, an image, a file, or a demo_id.")
     return {
@@ -398,6 +658,7 @@ def _prepare_request(payload: dict) -> dict:
         "image_url": image_url,
         "demo_id": demo_id,
         "filename": filename,
+        "photo_url": payload_photo,
     }
 
 

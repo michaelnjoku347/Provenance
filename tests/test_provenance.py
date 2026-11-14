@@ -1,4 +1,5 @@
 import base64
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,12 +43,42 @@ def test_health_and_homepage(client):
     assert body["keys"]["xdc_ai"] is False
 
 
-def test_demos_list_three_samples(client):
+def test_treg_news_can_lead_the_receipts():
+    from app.questions import compose
+
+    hits = [
+        {"url": "https://www.forbes.com/a", "title": "Forbes older", "excerpt": "Married for years.", "found_by": "You.com Search"},
+        {"url": "https://en.ilsole24ore.com/a", "title": "Il Sole", "excerpt": "Speculation only.", "found_by": "You.com Search"},
+        {"url": "https://www.reuters.com/a", "title": "Reuters", "excerpt": "A profile.", "found_by": "You.com Search"},
+        {"url": "https://fortune.com/huang", "title": "Fortune on the Huang divorce question", "excerpt": "Fortune reported on November 14, 2026.", "found_by": "Treg News", "page_age": "2026-11-14T09:37:00Z"},
+    ]
+    card = compose(
+        "what car is this?",
+        {"verdict": "Unverified", "confidence": 40, "summary": "", "contributions": []},
+        {"search": {"hits": hits}, "contents": {"pages": []}, "answer": {"text": "This is a Tesla Model 3, a mid-size electric sedan with a 2026 starting price of $36,990."}},
+        {},
+        {"seen": "Identified by Treg Google Lens: Tesla Model 3.", "questions": [{"id": "what", "kind": "identity", "text": "what car is this?"}], "names": []},
+    )
+    assert card["verdict"] == "Answered"
+    assert card["confidence"] >= 78
+    assert card["sources"][0]["found_by"] == "Treg News"
+    assert card["sources"][0]["domain"] == "fortune.com"
+
+
+def test_demos_list_real_samples(client):
     body = client.get("/api/demos").json()
-    assert [item["id"] for item in body["demos"]] == ["wire", "synthetic", "archive"]
-    image = client.get("/api/demos/synthetic/image")
+    assert [item["id"] for item in body["demos"]] == ["tesla", "huang", "reuters-post", "copacabana"]
+    blob = json.dumps(body)
+    assert "gossip.example" not in blob
+    assert "city hall" not in blob.lower()
+    assert "stable diffusion" not in blob.lower()
+    assert all(item["verdict"] == "" for item in body["demos"])
+    assert {item["label"] for item in body["demos"]} == {"Real photo", "Real post"}
+    image = client.get("/api/demos/tesla/image")
     assert image.status_code == 200
     assert image.content[:3] == b"\xff\xd8\xff"
+    fixture = client.get("/api/demos/synthetic/image")
+    assert fixture.status_code == 200
 
 
 def test_samples_fall_back_without_network(client, monkeypatch):
@@ -166,10 +197,12 @@ def test_youcom_corroboration_and_json_upload(client, monkeypatch):
 def test_treg_reverse_image_is_optional(client, monkeypatch):
     monkeypatch.setenv("TREG_API_KEY", "treg-test")
 
-    def fake_post(url, headers, payload, timeout=30.0):
-        assert url == "https://treg.to/call/serper.google.serp.lens"
+    def fake_get(url, headers=None, timeout=20.0):
+        if "catalog/search" in url:
+            return 200, {"tools": []}
+        assert url.startswith("https://treg.to/call/serper.google.serp.lens?url=")
         assert headers["X-Treg-Token"] == "treg-test"
-        assert payload["url"].startswith("https://")
+        assert "cdn.example.com" in url
         return 200, {
             "organic": [
                 {
@@ -180,6 +213,20 @@ def test_treg_reverse_image_is_optional(client, monkeypatch):
             ]
         }
 
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in str(url):
+            return 200, {
+                "organic": [
+                    {
+                        "title": "Downtown flood, March 2011",
+                        "link": "https://example.com/2011-flood",
+                        "date": "2011-03-12",
+                    }
+                ]
+            }
+        return 200, {"output": {"results": []}}
+
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
     monkeypatch.setattr("app.httputil.post_json", fake_post)
     skipped = client.post("/api/check", json={"demo_id": "archive"})
     assert skipped.json()["stages"]["reverse_image"]["status"] == "skipped"
@@ -569,10 +616,18 @@ def test_receipt_records_youcom_stats_and_source_tool(client, monkeypatch):
 def test_treg_match_is_tagged_and_timed(client, monkeypatch):
     monkeypatch.setenv("TREG_API_KEY", "treg-test")
 
-    def fake_post(url, headers, payload, timeout=30.0):
+    def fake_get(url, headers=None, timeout=20.0):
+        if "catalog/search" in url:
+            return 200, {"tools": []}
         assert "treg.to" in url
         return 200, {"organic": [{"title": "Downtown flood, March 2011", "link": "https://example.com/2011-flood", "date": "2011-03-12"}]}
 
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in str(url):
+            return 200, {"organic": [{"title": "Downtown flood, March 2011", "link": "https://example.com/2011-flood", "date": "2011-03-12"}]}
+        return 200, {"output": {"results": []}}
+
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
     monkeypatch.setattr("app.httputil.post_json", fake_post)
     body = client.post(
         "/api/check",
@@ -581,6 +636,524 @@ def test_treg_match_is_tagged_and_timed(client, monkeypatch):
     assert body["sponsors"]["treg"]["status"] == "ok"
     assert body["sponsors"]["treg"]["matches"] == 1
     assert isinstance(body["sponsors"]["treg"]["latency_ms"], int)
-    assert any(source["found_by"] == "Treg" for source in body["sources"])
+    assert any(source["found_by"] == "Treg Lens" for source in body["sources"])
     assert any(event["label"].startswith("Treg first seen") for event in body["timeline"])
     assert client.get("/api/sponsors").json()["treg"]["calls"] == 1
+
+
+def test_question_splits_who_and_whether_they_are_divorced():
+    from app.questions import split_questions
+
+    parts = split_questions("Are these two divorce and who are these two?")
+    kinds = {item["kind"] for item in parts}
+    assert kinds == {"identity", "relationship"}
+
+
+def test_image_question_uses_treg_names_then_youcom(client, monkeypatch):
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    seen = {}
+
+    def fake_get(url, headers=None, timeout=20.0):
+        if "catalog/search" in url:
+            return 200, {"tools": [{"id": "fixture.vision.caption", "description": "image caption vision"}]}
+        assert "cafefcdn.com" in url
+        return 200, {
+            "organic": [
+                {
+                    "title": "NVIDIA CEO Jensen Huang and his wife Lori Huang",
+                    "link": "https://www.reuters.com/technology/jensen-huang-profile",
+                    "snippet": "NVIDIA CEO Jensen Huang and his wife Lori Huang.",
+                }
+            ]
+        }
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in url:
+            return 200, {
+                "organic": [
+                    {
+                        "title": "NVIDIA CEO Jensen Huang and his wife Lori Huang",
+                        "link": "https://www.reuters.com/technology/jensen-huang-profile",
+                        "snippet": "NVIDIA CEO Jensen Huang and his wife Lori Huang.",
+                    }
+                ]
+            }
+        if "fixture.vision.caption" in url:
+            return 200, {"caption": "NVIDIA CEO Jensen Huang standing beside his wife Lori Huang."}
+        if url.endswith("/v1/search"):
+            seen["query"] = payload["query"]
+            return 200, {
+                "results": {
+                    "web": [
+                        {
+                            "url": "https://www.reuters.com/technology/jensen-huang-profile",
+                            "title": "Jensen Huang, NVIDIA chief executive",
+                            "contents": {"highlights": ["Jensen Huang is NVIDIA's CEO. His wife is Lori Huang."]},
+                        },
+                        {
+                            "url": "https://www.bbc.com/news/technology-jensen-huang",
+                            "title": "Who is Jensen Huang?",
+                            "contents": {"highlights": ["Huang and his wife Lori have been married for decades."]},
+                        },
+                        {
+                            "url": "https://gossip.example/huang-split",
+                            "title": "Rumor: Huang divorce?",
+                            "contents": {"highlights": ["A rumor says the couple might divorce."]},
+                        },
+                    ]
+                }
+            }
+        if url.endswith("/v1/contents"):
+            return 200, {"results": []}
+        if url.endswith("/v1/research"):
+            return 200, {
+                "output": {
+                    "content": '{"names":["Jensen Huang","Lori Huang"],"role":"NVIDIA CEO","relation":"wife","what":""}',
+                    "sources": [],
+                }
+            }
+        if url.endswith("/v1/answer"):
+            assert len(payload.get("query") or "") <= 400
+            return 200, {"answer": "", "citations": []}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    monkeypatch.setattr("app.httputil.get_bytes", lambda url, timeout=20.0: (404, b"", ""))
+    body = client.post(
+        "/api/check",
+        json={
+            "claim": "Are these two divorce and who are these two?",
+            "image_url": "https://cafefcdn.com/thumb_w/1200/203337114487263232/2024/11/25/avatar1732525933296-1732525938744619592903.jpg",
+        },
+    ).json()
+    assert "Jensen Huang" in seen["query"]
+    assert "divorce" in seen["query"].lower()
+    assert "Jensen Huang" in body["answer"]["text"]
+    assert "Lori" in body["answer"]["text"]
+    assert "no credible reports they are divorced" in body["answer"]["text"].lower()
+    assert "No credible evidence they are divorced" in body["answer"]["line"]
+    assert body["answer"]["verdict"] == "False"
+    assert len(body["answer"]["why"]) <= 3
+    assert 1 <= len(body["answer"]["sources"]) <= 3
+    assert body["answer"]["sources"][0]["domain"] in {"reuters.com", "bbc.com"}
+    assert body["stages"]["vision"]["status"] == "ok"
+    assert "Jensen Huang" in body["claim"]["seen"]
+
+
+def test_what_car_question_is_identity():
+    from app.questions import split_questions
+
+    kinds = {item["kind"] for item in split_questions("what car is this?")}
+    assert "identity" in kinds
+
+
+def test_see_failure_is_reported_and_the_check_continues(client, monkeypatch):
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("catalog down")
+
+    monkeypatch.setattr("app.httputil.get_json", boom)
+    monkeypatch.setattr("app.httputil.post_json", boom)
+    monkeypatch.setattr("app.httputil.get_bytes", boom)
+    response = client.post(
+        "/api/check",
+        json={"claim": "what car is this?", "image_url": "https://cdn.example.com/car.jpg"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stages"]["vision"]["status"] in {"error", "skipped"}
+    assert "continued" in body["stages"]["vision"]["detail"].lower()
+    assert body["verdict"]
+
+
+def test_treg_failure_still_returns_a_result(client, monkeypatch):
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("treg down")
+
+    monkeypatch.setattr("app.httputil.get_json", boom)
+    monkeypatch.setattr("app.httputil.post_json", boom)
+    monkeypatch.setattr("app.httputil.get_bytes", boom)
+    response = client.post(
+        "/api/check",
+        json={
+            "claim": "Who are these two?",
+            "image_url": "https://cdn.example.com/people.jpg",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stages"]["reverse_image"]["status"] == "error"
+    assert body["verdict"] == "Unverified"
+
+
+def test_mojibake_repairs_to_utf8():
+    from app.textutil import repair_text
+
+    assert repair_text("Affair\u00e2\u0080\u0094Why") == "Affair\u2014Why"
+    assert repair_text("Huang\u00e2\u0080\u0099s") == "Huang\u2019s"
+
+
+def test_contents_accepts_a_top_level_list():
+    from app.youcom import _parse_pages
+
+    pages = _parse_pages(
+        [
+            {
+                "url": "https://www.forbes.com/example",
+                "title": "Affair\u00e2\u0080\u0094Why",
+                "markdown": "Divorce speculation, not a filing.",
+            }
+        ]
+    )
+    assert pages[0]["title"] == "Affair\u2014Why"
+    assert pages[0]["url"].endswith("/example")
+
+
+def test_major_outlets_are_credible_and_gossip_is_not():
+    from app.verdict import is_credible, is_rumor, tier
+
+    for url in (
+        "https://www.forbes.com/sites/example",
+        "https://economictimes.indiatimes.com/news/example",
+        "https://www.yahoo.com/lifestyle/example",
+        "https://www.mensjournal.com/news/example",
+        "https://en.ilsole24ore.com/art/example",
+    ):
+        assert is_credible(url), url
+        assert tier(url) in {1, 2}
+    assert is_rumor("https://www.celebitchy.com/example")
+    assert not is_credible("https://www.celebitchy.com/example")
+
+
+def test_frequency_names_skip_publication_fragments():
+    from app.questions import frequency_names
+
+    matches = [
+        {
+            "title": "New Oregon State supercomputer will be like a time machine, NVIDIA CEO Jensen Huang says",
+            "snippet": "Oregon Live. He spoke beside his wife Lori Huang.",
+        },
+        {"title": "Jensen Huang and his wife Lori Huang", "snippet": "NVIDIA CEO Jensen Huang."},
+        {"title": "Who is Lori Huang? Jensen Huang's wife", "snippet": ""},
+    ]
+    names = frequency_names(matches)
+    assert names[0] == "Jensen Huang"
+    assert "Lori Huang" in names
+    assert "Oregon Live He" not in names
+    assert "New Oregon State" not in names
+    headlines = [
+        {"title": "Spouse Helps Launch Nvidia Foundation at Oregon State University", "snippet": "Lori Mills Huang attended."},
+        {"title": "nvidia ceo jensen huang and his wife lori huang", "snippet": ""},
+        {"title": "Jensen Huang says the new machine is ready", "snippet": "Jensen Huang spoke."},
+        {"title": "Who is Lori Huang? Jensen Huang's wife of 40 years", "snippet": ""},
+    ]
+    ranked = frequency_names(headlines)
+    assert ranked[0] == "Jensen Huang"
+    assert "Spouse Helps Launch" not in ranked
+    assert "Helps Launch" not in ranked
+    assert all("Foundation" not in name and "University" not in name and "Spouse" not in name for name in ranked)
+
+
+def test_answer_queries_stay_within_400_characters(client, monkeypatch):
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+    seen = {"answer": [], "research": 0}
+
+    def fake_get(url, headers=None, timeout=20.0):
+        if "catalog/search" in url:
+            return 200, {"tools": []}
+        return 200, {"organic": [{"title": "Jensen Huang and his wife Lori Huang", "link": "https://www.reuters.com/huang", "snippet": "Jensen Huang."}]}
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [{"url": "https://www.reuters.com/huang", "title": "Jensen Huang", "snippets": ["Jensen Huang is NVIDIA's CEO."]}]}}
+        if url.endswith("/v1/contents"):
+            return 200, []
+        if url.endswith("/v1/answer"):
+            query = payload.get("query") or ""
+            assert len(query) <= 400
+            seen["answer"].append(query)
+            return 200, {"answer": "Unverified.", "citations": []}
+        if url.endswith("/v1/research"):
+            seen["research"] += 1
+            assert len(payload.get("input") or "") > 400
+            return 200, {"output": {"content": '{"people":["Jensen Huang","Lori Huang"]}', "sources": []}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    monkeypatch.setattr("app.httputil.get_bytes", lambda url, timeout=20.0: (404, b"", ""))
+    long_claim = "A crowd gathered outside city hall this morning. " + ("detail " * 120)
+    statement = client.post("/api/check", json={"claim": long_claim}).json()
+    assert statement["verdict"]
+    assert seen["answer"]
+    assert all(len(query) <= 400 for query in seen["answer"])
+    question = client.post(
+        "/api/check",
+        json={"claim": "Are Jensen Huang and Lori Huang divorced?", "image_url": "https://cdn.example.com/huang.jpg"},
+    ).json()
+    assert question["sponsors"]["youcom_answer"]["label"] == "You.com Research"
+    assert seen["research"] >= 1
+    assert all(len(query) <= 400 for query in seen["answer"])
+
+
+def test_huang_live_fixture_names_the_couple_and_the_speculation(client, monkeypatch):
+    """The attached live receipt, replayed through mocked HTTP."""
+    import hashlib
+    import json
+    from pathlib import Path
+
+    live = json.loads(Path("tests/fixtures/huang_live.json").read_text(encoding="utf-8-sig"))
+    jpeg = b"\xff\xd8\xff\xd9huang"
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+    seen = {"catalog": 0, "prompts": []}
+
+    lens = {
+        "organic": [
+            {
+                "title": "New Oregon State supercomputer will be like 'a time machine' NVIDIA CEO Jensen Huang says",
+                "link": "https://www.oregonlive.com/silicon-forest/2022/10/new-oregon-state-supercomputer-will-be-like-a-time-machine-nvidia-ceo-jesen-huang-says-qa.html",
+                "snippet": "Oregon Live. He says the machine is a time machine. NVIDIA CEO Jensen Huang.",
+            },
+            {
+                "title": "NVIDIA CEO Jensen Huang and his wife Lori Huang",
+                "link": "https://www.reuters.com/technology/jensen-huang",
+                "snippet": "Jensen Huang with his wife Lori Huang.",
+            },
+            {
+                "title": "Jensen Huang, Nvidia CEO, and Lori Huang",
+                "link": "https://www.forbes.com/sites/jensen",
+                "snippet": "Lori Huang has been married to Jensen Huang since 1985.",
+            },
+            {
+                "title": "Who is Lori Huang, wife of Jensen Huang?",
+                "link": "https://www.bbc.com/news/lori-huang",
+                "snippet": "Lori Huang and Jensen Huang.",
+            },
+            {
+                "title": "Jensen Huang family photo with Lori Huang",
+                "link": "https://www.bloomberg.com/news/huang",
+                "snippet": "NVIDIA CEO Jensen Huang and Lori Huang.",
+            },
+            {
+                "title": "Lori Huang beside Jensen Huang",
+                "link": "https://www.cnbc.com/huang",
+                "snippet": "Jensen Huang and his wife Lori Huang at an event.",
+            },
+        ]
+    }
+
+    def fake_get(url, headers=None, timeout=20.0):
+        if "catalog/search" in url:
+            seen["catalog"] += 1
+            return 200, {"tools": []}
+        assert "serper.google.serp.lens" in url
+        return 200, lens
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "serp.lens" in url:
+            return 200, lens
+        if url.endswith("/v1/search"):
+            seen["query"] = payload["query"]
+            web = []
+            for source in live["sources"]:
+                web.append(
+                    {
+                        "url": source["url"],
+                        "title": source["title"],
+                        "page_age": source.get("page_age") or "",
+                        "description": source.get("excerpt") or "",
+                        "snippets": [source.get("excerpt") or ""],
+                    }
+                )
+            return 200, {"results": {"web": web}}
+        if url.endswith("/v1/contents"):
+            forbes = live["sources"][1]
+            return 200, [
+                {
+                    "url": forbes["url"],
+                    "title": forbes["title"],
+                    "markdown": forbes["excerpt"],
+                    "metadata": {"site_name": "Forbes"},
+                }
+            ]
+        if url.endswith("/v1/research"):
+            prompt = payload.get("input") or ""
+            seen["prompts"].append(prompt)
+            if "Return one JSON object" in prompt or "people" in prompt:
+                return 200, {
+                    "output": {
+                        "content": '{"people":["Jensen Huang","Lori Huang"],"role":"NVIDIA CEO","relation":"wife","what":""}',
+                        "sources": [{"url": "https://www.forbes.com/sites/example", "title": "Forbes", "snippets": ["speculation"]}],
+                    }
+                }
+            if "reverse-image page titles" in prompt:
+                return 200, {"output": {"content": "NVIDIA CEO Jensen Huang standing with his wife Lori Huang.", "sources": []}}
+            return 200, {"output": {"content": "They are not reported divorced.", "sources": []}}
+        if url.endswith("/v1/answer"):
+            prompt = payload.get("query") or ""
+            assert len(prompt) <= 400
+            seen["prompts"].append(prompt)
+            return 200, {"answer": "", "citations": []}
+        if "generativelanguage" in url:
+            raise AssertionError("gemini should not run without a key")
+        raise AssertionError(url)
+
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    monkeypatch.setattr("app.httputil.get_bytes", lambda url, timeout=20.0: (200, jpeg, "image/jpeg"))
+    body = client.post(
+        "/api/check",
+        json={
+            "claim": live["claim"]["text"],
+            "image_url": "https://cafefcdn.com/thumb_w/1200/203337114487263232/2024/11/25/avatar1732525933296-1732525938744619592903.jpg",
+        },
+    ).json()
+    expected = (
+        "This is NVIDIA CEO Jensen Huang and his wife Lori Huang. "
+        "They are not reported divorced; Forbes reports divorce speculation after alleged affairs, "
+        "but no filing or announcement."
+    )
+    assert body["summary"] == expected
+    assert body["answer"]["text"] == expected
+    assert body["verdict"] == "Unverified"
+    assert "Oregon Live" not in body["summary"]
+    assert "New Oregon" not in body["summary"]
+    assert "Jensen Huang" in seen["query"] and "divorce" in seen["query"].lower()
+    assert "Oregon" not in seen["query"]
+    assert body["image_sha256"] == hashlib.sha256(jpeg).hexdigest()
+    assert body["image_sha256"] != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    assert body["mode"] == "url"
+    assert body["stages"]["youcom_contents"]["status"] == "ok"
+    assert "HTTP 200" not in body["stages"]["youcom_contents"]["detail"]
+    forbes = next(source for source in body["sources"] if "forbes.com" in source["url"])
+    assert forbes["credible"] is True
+    assert "\u2014" in forbes["title"]
+    assert "\u00e2" not in forbes["title"]
+    assert any("JSON" in prompt or "people" in prompt for prompt in seen["prompts"])
+    assert body["sponsors"]["youcom_answer"]["label"] == "You.com Research"
+    assert body["stages"]["vision"]["status"] == "ok"
+    assert body["stages"]["vision"]["detail"]
+
+
+def test_gemini_reads_the_image_when_treg_has_no_vision_tool(client, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+
+    def fake_get(url, headers=None, timeout=20.0):
+        if "catalog/search" in url:
+            return 200, {"tools": []}
+        return 200, {"organic": []}
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        assert "generativelanguage.googleapis.com" in url
+        assert headers.get("x-goog-api-key") == "gemini-test"
+        return 200, {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": '{"claim":"This is a Tesla Model S.","who":"","what":"Tesla Model S","where":"","when":"","search_query":"Tesla Model S"}'
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    body = client.post(
+        "/api/check",
+        json={"claim": "what car is this?", "image_base64": "data:image/jpeg;base64,/9j/4AAQ"},
+    ).json()
+    assert body["stages"]["vision"]["status"] == "ok"
+    assert "Tesla Model S" in body["claim"]["seen"]
+
+
+def test_treg_news_web_and_x_are_separate_rows(client, monkeypatch):
+    monkeypatch.setenv("TREG_API_KEY", "treg-test")
+    monkeypatch.setenv("YDC_API_KEY", "test-key")
+    seen = {"tools": []}
+
+    def fake_post(url, headers, payload, timeout=30.0):
+        if "treg.to/call/" in url:
+            tool = url.rsplit("/", 1)[-1]
+            seen["tools"].append(tool)
+            assert timeout <= 25
+            if "serp.lens" in tool:
+                return 200, {
+                    "output": {
+                        "knowledge_graph": {"title": "Jensen Huang"},
+                        "visual_matches": [{"title": "Jensen Huang on stage", "link": "https://www.reuters.com/photo"}],
+                    }
+                }
+            if tool == "treg.google.serp.news":
+                return 200, {"output": {"results": [{"title": "Fortune on Jensen Huang", "link": "https://fortune.com/huang", "published_at": "2026-11-14T09:37:00Z", "source": "Fortune"}]}}
+            if tool == "treg.google.serp.organic":
+                return 200, {"output": {"results": [
+                    {"title": "Fortune on Jensen Huang", "url": "https://fortune.com/huang", "snippet": "duplicate"},
+                    {"title": "A web page", "url": "https://www.reuters.com/huang-web", "snippet": "Jensen Huang", "date": "2026-11-12"},
+                ]}}
+            if tool == "treg.x.user.profile":
+                assert payload["username"] == "Reuters"
+                return 200, {"output": {"username": "Reuters", "name": "Reuters", "followers": 25000000, "is_verified": True, "description": "Top and breaking news."}}
+            if tool == "treg.x.post.comments":
+                if "tweet_id" not in payload:
+                    return 422, {"error": "expected tweet_id"}
+                return 200, {"output": {"comments": [{"text": "This claim leaves out the date.", "username": "reader"}]}}
+            return 200, {"output": {"results": []}}
+        if url.endswith("/v1/search"):
+            return 200, {"results": {"web": [{"url": "https://www.reuters.com/huang", "title": "Reuters", "snippets": ["Jensen Huang."]}]}}
+        if url.endswith("/v1/contents"):
+            return 200, []
+        if url.endswith("/v1/answer"):
+            assert len(payload.get("query") or "") <= 400
+            return 200, {"answer": "", "citations": []}
+        if url.endswith("/v1/research"):
+            return 200, {"output": {"content": "Noted.", "sources": []}}
+        raise AssertionError(url)
+
+    def fake_get(url, headers=None, timeout=20.0):
+        if "oembed" in url:
+            return 200, {
+                "author_name": "Reuters",
+                "author_url": "https://x.com/Reuters",
+                "html": '<p>Trump tells advisers he may hold off.</p><img src="https://cdn.example.com/photo.jpg">',
+            }
+        return 200, {
+            "output": {
+                "knowledge_graph": {"title": "Jensen Huang"},
+                "visual_matches": [{"title": "Jensen Huang on stage", "link": "https://www.reuters.com/photo"}],
+            }
+        }
+
+    monkeypatch.setattr("app.httputil.post_json", fake_post)
+    monkeypatch.setattr("app.httputil.get_json", fake_get)
+    body = client.post(
+        "/api/check",
+        json={
+            "claim": "Who is this?",
+            "image_url": "https://x.com/Reuters/status/2121624210791440863",
+        },
+    ).json()
+    assert "Identified by Treg Google Lens" in body["claim"]["seen"]
+    assert "treg.google.serp.news" in seen["tools"]
+    assert "treg.google.serp.organic" in seen["tools"]
+    found = {source["url"]: source["found_by"] for source in body["sources"]}
+    assert found["https://fortune.com/huang"] == "Treg News"
+    assert found["https://www.reuters.com/huang-web"] == "Treg Web"
+    assert found["https://fortune.com/huang"] != "Treg Web"
+    assert body["stages"]["treg_news"]["status"] == "ok"
+    assert body["stages"]["treg_web"]["results"] == 2
+    assert body["poster"]["verified"] is True
+    assert body["poster"]["followers"] == 25000000
+    assert body["pushback"][0]["text"].startswith("This claim leaves out")
+    assert body["stages"]["reverse_image"]["detail"].startswith("Identified by Treg Google Lens")

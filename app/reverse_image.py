@@ -23,10 +23,11 @@ def _matches(body: dict) -> list[dict]:
                         "title": str(title)[:180],
                         "date": str(node.get("date") or node.get("page_age") or "")[:40],
                         "source": str(node.get("source") or "")[:80],
+                        "snippet": str(node.get("snippet") or node.get("excerpt") or node.get("description") or "")[:300],
                     }
                 )
             for key, value in node.items():
-                walk(value, preferred or key in {"organic", "visual_matches", "exact_matches", "matches"})
+                walk(value, preferred or key in {"organic", "visual_matches", "exact_matches", "matches", "results", "output"})
         elif isinstance(node, list):
             for item in node:
                 walk(item, preferred)
@@ -40,6 +41,18 @@ def _matches(body: dict) -> list[dict]:
         seen.add(item["url"])
         unique.append(item)
     return unique[:6]
+
+
+def knowledge_title(body) -> str:
+    if not isinstance(body, dict):
+        return ""
+    output = body.get("output") if isinstance(body.get("output"), dict) else body
+    graph = output.get("knowledge_graph") or output.get("knowledgeGraph") or {}
+    if isinstance(graph, dict):
+        title = graph.get("title") or graph.get("name") or ""
+        if title:
+            return str(title)[:180]
+    return ""
 
 
 def lookup(image_url: str) -> dict:
@@ -87,11 +100,16 @@ def lookup(image_url: str) -> dict:
             "latency_ms": elapsed,
         }
     matches = _matches(body)
+    named = knowledge_title(body)
     sponsors.record("treg", called=True, latency_ms=elapsed, matches=len(matches), status="ok")
+    detail = f"Identified by Treg Google Lens. {len(matches)} visual matches via {tool}."
+    if named:
+        detail = f"Identified by Treg Google Lens: {named}. {len(matches)} visual matches."
     return {
         "status": "ok",
-        "detail": f"{len(matches)} visual matches via {tool}.",
+        "detail": detail,
         "tool": tool,
         "matches": matches,
+        "knowledge_title": named,
         "latency_ms": elapsed,
     }

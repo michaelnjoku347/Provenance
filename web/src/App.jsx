@@ -18,6 +18,7 @@ import { runCheck, STAGE_FALLBACK } from './lib/api.js'
 import { cn } from './lib/cn.js'
 
 const VERDICTS = {
+  Answered: { color: '#C8F54A', soft: 'rgba(200,245,74,0.12)', label: 'Answered' },
   True: { color: '#C8F54A', soft: 'rgba(200,245,74,0.12)', label: 'True' },
   False: { color: '#FF5C7A', soft: 'rgba(255,92,122,0.12)', label: 'False' },
   'Misleading or Out of Context': { color: '#FFB020', soft: 'rgba(255,176,32,0.12)', label: 'Misleading or Out of Context' },
@@ -25,6 +26,7 @@ const VERDICTS = {
 }
 
 const STAMPS = {
+  Answered: ['ANSWERED'],
   True: ['TRUE'],
   False: ['FALSE'],
   'Misleading or Out of Context': ['MISLEADING'],
@@ -118,6 +120,7 @@ export default function App() {
   const [x402Open, setX402Open] = useState(false)
   const inputRef = useRef(null)
   const stageRef = useRef(null)
+  const sampleClaimRef = useRef('')
 
   useEffect(() => {
     setRecents(loadRecents())
@@ -195,7 +198,10 @@ export default function App() {
     clearPreview()
     setFile(next)
     setPreview(URL.createObjectURL(next))
+    setImageUrl('')
     setDemoId('')
+    setClaim((current) => (sampleClaimRef.current && current.trim() === sampleClaimRef.current.trim() ? '' : current))
+    sampleClaimRef.current = ''
     setError('')
     setResult(null)
   }
@@ -205,6 +211,8 @@ export default function App() {
     setFile(null)
     setDemoId(demo.id)
     setClaim(demo.claim || '')
+    sampleClaimRef.current = (demo.claim || '').trim()
+    setImageUrl(demo.url || '')
     setPreview(`/api/demos/${demo.id}/image`)
     setError('')
     setResult(null)
@@ -228,22 +236,23 @@ export default function App() {
   async function startCheck(overrides = {}) {
     const body = { ...overrides }
     const usingDemo = body.demo_id || demoId
-    if (usingDemo && !body.image_base64) {
+    if (file && !body.image_base64 && !overrides.demo_id) {
+      body.image_base64 = await fileToBase64(file)
+      body.filename = file.name
+      body.media_type = file.type || 'image/jpeg'
+      body.claim = (overrides.claim ?? claim ?? '').trim()
+      delete body.demo_id
+      delete body.image_url
+    } else if (usingDemo && !body.image_base64) {
       body.demo_id = usingDemo
       if (!body.claim) body.claim = claim
       if (!body.image_url) body.image_url = imageUrl
     } else {
-      const chosen = file
       const typedClaim = (body.claim || claim || '').trim()
       const typedUrl = (body.image_url || imageUrl || '').trim()
-      if (!chosen && !body.image_base64 && !typedClaim && !typedUrl) {
+      if (!body.image_base64 && !typedClaim && !typedUrl) {
         setError('Add a claim, a link, an image, or a file.')
         return
-      }
-      if (chosen && !body.image_base64) {
-        body.image_base64 = await fileToBase64(chosen)
-        body.filename = chosen.name
-        body.media_type = chosen.type || 'image/jpeg'
       }
       if (!body.claim) body.claim = claim
       if (!body.image_url) body.image_url = imageUrl
@@ -291,12 +300,18 @@ export default function App() {
           setBusy(false)
           if (payload.preview_url) setPreview(payload.preview_url)
           else if (!preview && payload.link?.image_url) setPreview(payload.link.image_url)
+          else if (!preview && /\.(jpe?g|png|webp)(\?|$)/i.test(imageUrl)) setPreview(imageUrl)
           fetch('/api/sponsors')
             .then((r) => r.json())
             .then(setSponsorStatus)
             .catch(() => {})
           remember(payload)
-          requestAnimationFrame(() => stageRef.current?.scrollTo({ top: 0, behavior: 'smooth' }))
+          requestAnimationFrame(() => {
+            const card = document.getElementById('result-card')
+            const narrow = window.matchMedia('(max-width: 1023px)').matches
+            if (narrow && card) card.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            else stageRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+          })
         },
       })
     } catch (err) {
@@ -418,7 +433,7 @@ export default function App() {
                 onChange={(e) => setClaim(e.target.value)}
                 rows={3}
                 placeholder="What is being claimed? Leave this blank to use an X post or an article."
-                className="mt-1.5 w-full resize-none rounded-xl border border-line bg-ink px-3 py-2 text-sm leading-5 text-paper placeholder:text-mist/60 focus:border-lime/50"
+                className="field mt-1.5 w-full resize-none rounded-xl border border-line bg-ink px-3 py-2 text-sm leading-5 text-paper placeholder:text-mist/60"
               />
             </label>
             <label className="block">
@@ -427,9 +442,24 @@ export default function App() {
                 <Link2 className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-mist" />
                 <input
                   value={imageUrl}
-                  onChange={(e) => setImageUrl(e.target.value)}
-                  placeholder="x.com/…/status/… or an article URL"
-                  className="w-full rounded-xl border border-line bg-ink py-2 pl-9 pr-3 text-sm text-paper placeholder:text-mist/60 focus:border-lime/50"
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setImageUrl(value)
+                    if (!value.trim()) return
+                    if (file || demoId) {
+                      clearPreview()
+                      setFile(null)
+                      setDemoId('')
+                      setPreview('')
+                      setClaim((current) => (sampleClaimRef.current && current.trim() === sampleClaimRef.current.trim() ? '' : current))
+                      sampleClaimRef.current = ''
+                    }
+                  }}
+                  inputMode="url"
+                  spellCheck={false}
+                  aria-label="Link"
+                  placeholder="https:// or x.com/…/status/…"
+                  className="field w-full rounded-xl border border-line bg-ink py-2 pl-9 pr-3 font-mono text-[13px] text-paper placeholder:font-sans placeholder:text-mist/60"
                 />
               </div>
             </label>
@@ -445,12 +475,13 @@ export default function App() {
                 onPickFile(e.dataTransfer.files?.[0])
               }}
               className={cn(
-                'flex cursor-pointer items-center gap-3 rounded-xl border border-dashed p-2 text-left transition',
-                drag ? 'border-lime bg-lime/5' : 'border-line hover:border-lime/35',
+                'dropzone flex cursor-pointer items-center gap-3 rounded-xl border border-dashed p-2 text-left',
+                drag ? 'dropzone-hot border-lime bg-lime/5' : 'border-line hover:border-lime/35',
               )}
             >
+              <span className="drop-sheen" aria-hidden="true" />
               {currentPreview ? (
-                <img src={currentPreview} alt="" className="h-12 w-16 shrink-0 rounded-lg object-cover" />
+                <img src={currentPreview} alt="" className="h-14 w-20 shrink-0 rounded-lg object-cover ring-1 ring-white/10" />
               ) : (
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-panel-2">
                   <ImagePlus className="h-4 w-4 text-lime" />
@@ -470,11 +501,21 @@ export default function App() {
                 onChange={(e) => onPickFile(e.target.files?.[0])}
               />
             </label>
+            {file || imageUrl.trim() || claim.trim() || demoId ? (
+              <div className="flex items-center justify-between gap-2 px-1">
+                <p className="min-w-0 truncate text-xs text-mist">
+                  {file ? `Checking file: ${file.name}` : imageUrl.trim() ? `Checking link: ${imageUrl.trim()}` : demoId ? `Checking sample: ${selectedDemo?.title || 'sample'}` : 'Checking the claim you typed'}
+                </p>
+                <button type="button" onClick={resetDesk} className="btn-ghost shrink-0 rounded-full border border-line px-2.5 py-1 text-xs text-paper">
+                  Clear
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               disabled={busy}
               onClick={() => void startCheck()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-lime px-4 py-2.5 text-sm font-semibold text-ink shadow-[0_0_24px_rgba(200,245,74,0.16)] transition hover:bg-lime/90 disabled:cursor-wait disabled:opacity-70"
+              className="btn-primary inline-flex w-full items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold text-ink"
             >
               {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               {busy ? 'Checking…' : 'Check claim'}
@@ -501,7 +542,11 @@ export default function App() {
             ) : null}
             {mode === 'live' ? (
               <>
-                <Hero src={currentPreview} alt="Image being checked" scanning>
+                <Hero
+                  src={currentPreview}
+                  alt="Image being checked"
+                  scanning={stages.some((stage) => (stage.id === 'vision' || stage.id === 'reverse_image') && stage.status === 'running')}
+                >
                   <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full bg-ink/75 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-lime backdrop-blur">
                     <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" />
                     Live
@@ -511,26 +556,12 @@ export default function App() {
               </>
             ) : null}
             {mode === 'receipt' && result ? (
-              <>
-                <Hero src={currentPreview} alt="Checked image">
-                  <div className="absolute right-5 top-5 sm:right-7 sm:top-6">
-                    <Stamp verdict={result.verdict} />
+              <div id="result-card">
+                {(currentPreview || result.preview_url) ? (
+                  <div className="h-28 shrink-0 overflow-hidden bg-[#05070a]">
+                    <img src={currentPreview || result.preview_url} alt="" className="h-full w-full object-cover" />
                   </div>
-                  <div className="absolute inset-x-0 bottom-0 p-4 sm:p-5">
-                    <div className="max-w-xl">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/70">Receipt {result.receipt_id}</div>
-                      <p className="mt-1 line-clamp-2 text-sm leading-5 text-white">{result.summary}</p>
-                      <div className="mt-3 flex items-center gap-3">
-                        <div className="h-1.5 w-36 overflow-hidden rounded-full bg-white/20">
-                          <div className="h-full rounded-full" style={{ width: `${result.confidence}%`, background: themeFor(result.verdict).color }} />
-                        </div>
-                        <span className="font-mono text-xs text-white">{result.confidence}%</span>
-                        <span className="font-mono text-[10px] uppercase tracking-wider text-white/60">Not a guarantee</span>
-                      </div>
-                    </div>
-                  </div>
-                </Hero>
-                <X402Card status={sponsorStatus} receipt={result.sponsors} onOpen={() => setX402Open(true)} />
+                ) : null}
                 <Receipt
                   result={result}
                   copied={copied}
@@ -546,7 +577,7 @@ export default function App() {
                   flagState={flagState}
                   onFlag={submitFlag}
                 />
-              </>
+              </div>
             ) : null}
           </div>
         </section>
@@ -608,7 +639,7 @@ function DemoTray({ demos, demoId, onChoose, layout }) {
         <h2 className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Sample claims</h2>
         <span className="font-mono text-[10px] text-mist">{demos.length} samples</span>
       </div>
-      <div className={cn(strip ? '-mx-1 flex gap-2 overflow-x-auto px-1 pb-1' : 'grid grid-cols-3 gap-2')}>
+      <div className={cn(strip ? '-mx-1 flex gap-2 overflow-x-auto px-1 pb-1' : 'grid grid-cols-2 gap-2')}>
         {demos.map((demo, index) => {
           const selected = demoId === demo.id
           return (
@@ -618,7 +649,7 @@ function DemoTray({ demos, demoId, onChoose, layout }) {
               onClick={() => onChoose(demo)}
               aria-pressed={selected}
               className={cn(
-                'overflow-hidden rounded-xl border bg-[#10161d] text-left transition hover:border-lime/40',
+                'sample-card overflow-hidden rounded-xl border bg-[#10161d] text-left hover:border-lime/40',
                 strip ? 'w-[15.5rem] shrink-0 snap-start' : 'flex flex-col',
                 selected ? 'border-lime/70 ring-1 ring-lime/30' : 'border-line',
               )}
@@ -629,7 +660,7 @@ function DemoTray({ demos, demoId, onChoose, layout }) {
                   alt=""
                   className={cn('w-full object-cover', strip ? 'h-28' : 'h-[4.75rem]')}
                 />
-                <span className="absolute left-1.5 top-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] text-lime">0{index + 1}</span>
+                <span className="absolute left-1.5 top-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-lime">{demo.label || demo.blurb || `0${index + 1}`}</span>
                 {selected && !strip ? (
                   <span className="absolute bottom-1.5 right-1.5 rounded bg-ink/80 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-lime">
                     On stage
@@ -722,20 +753,13 @@ function Hero({ src, alt, children, scanning = false }) {
     <div className={cn('relative h-[220px] shrink-0 overflow-hidden bg-[#05070a] sm:h-[260px] lg:h-[280px]', scanning && 'scanning')}>
       {src ? <img src={src} alt={alt} className="h-full w-full object-cover" /> : null}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0d] via-[#070a0d]/15 to-[#070a0d]/25" />
-      {scanning ? <span className="scanline" aria-hidden="true" /> : null}
+      {scanning ? (
+        <>
+          <span className="scanline" aria-hidden="true" />
+          <span className="scan-shimmer" aria-hidden="true" />
+        </>
+      ) : null}
       {children}
-    </div>
-  )
-}
-
-function Stamp({ verdict }) {
-  const theme = themeFor(verdict)
-  const lines = STAMPS[verdict] || STAMPS.Unverified
-  return (
-    <div className="stamp" style={{ color: theme.color }} aria-label={verdict}>
-      {lines.map((line) => (
-        <span key={line}>{line}</span>
-      ))}
     </div>
   )
 }
@@ -794,6 +818,65 @@ function ProgressPanel({ stages }) {
   )
 }
 
+function AnswerCard({ result }) {
+  const answer = result.answer || {}
+  const verdict = answer.verdict || result.verdict
+  const theme = themeFor(verdict)
+  const text = answer.text || result.summary
+  const why = (answer.why || []).slice(0, 3)
+  const sources = (answer.sources || []).slice(0, 3)
+  return (
+    <article className="rounded-2xl border border-line bg-[#10161d] p-4 sm:p-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="stamp !min-w-0 !px-3 !py-1 !text-lg" style={{ color: theme.color }} aria-label={verdict}>
+          {(STAMPS[verdict] || [verdict]).join(' ')}
+        </span>
+        <span className="font-mono text-sm text-mist">
+          <CountUp value={answer.confidence ?? result.confidence} />% confidence
+        </span>
+      </div>
+      <p className="answer-line mt-4 text-lg leading-7">
+        <TypeLine text={text} />
+      </p>
+      {answer.line ? <p className="answer-line mt-2 text-sm text-amber">{answer.line}</p> : null}
+      {why.length ? (
+        <ul className="mt-4 space-y-2">
+          {why.map((item, index) => (
+            <li key={item.text} className="why-in text-sm leading-6 text-mist" style={{ animationDelay: `${180 + index * 90}ms` }}>
+              {item.text}
+              {item.url ? (
+                <a href={item.url} target="_blank" rel="noreferrer" className="ml-2 text-cyan hover:underline">
+                  {item.domain || hostOf(item.url)}
+                </a>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {sources.length ? (
+        <div className="mt-4 grid gap-2">
+          {sources.map((source, index) => (
+            <a
+              key={source.url}
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="source-in rounded-xl border border-line bg-ink px-3 py-2 hover:border-lime/40"
+              style={{ animationDelay: `${360 + index * 80}ms` }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">{source.title}</span>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-cyan">{source.found_by ? `${source.found_by} · ` : ''}{source.domain}</span>
+              </div>
+              {source.quote ? <p className="mt-1 line-clamp-2 text-sm text-mist">{source.quote}</p> : null}
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
 function StatusDot({ status }) {
   if (status === 'running') return <span className="pulse-dot mt-1.5 h-2 w-2 shrink-0 rounded-full bg-lime" />
   if (status === 'ok') {
@@ -806,6 +889,57 @@ function StatusDot({ status }) {
   if (status === 'error') return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-rose" />
   if (status === 'skipped') return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full border border-mist/40" />
   return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-line" />
+}
+
+function SponsorTrace({ result }) {
+  const stages = result.stages || {}
+  const rows = ['reverse_image', 'vision', 'treg_news', 'treg_web', 'treg_profile', 'treg_replies', 'youcom_search', 'youcom_contents', 'youcom_answer']
+    .map((id) => ({ id, ...(stages[id] || {}) }))
+    .filter((stage) => stage.status && stage.status !== 'skipped')
+  if (!rows.length) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {rows.map((stage) => (
+        <SponsorChip
+          key={stage.id}
+          stage={{
+            ...stage,
+            sponsor: { reverse_image: 'treg_lens', vision: 'gemini' }[stage.id] || stage.id,
+            stats: stage,
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function PosterChip({ poster }) {
+  const followers = Number(poster.followers)
+  const loaded = Boolean(poster?.name || poster?.description || poster?.verified || (Number.isFinite(followers) && followers > 0))
+  if (!loaded) return null
+  const count = Number.isFinite(followers) ? followers.toLocaleString('en-US') : String(poster.followers || '0')
+  return (
+    <p className="rounded-full border border-line bg-[#10161d] px-3 py-1.5 text-xs text-mist">
+      Poster credibility: {poster.verified ? 'Verified' : 'Not verified'} · {count} followers
+      {poster.description ? ` · ${poster.description}` : ''}
+    </p>
+  )
+}
+
+function Pushback({ replies }) {
+  return (
+    <div className="rounded-xl border border-line bg-[#10161d] px-3 py-2">
+      <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist">Community pushback</p>
+      <ul className="mt-1 space-y-1">
+        {replies.slice(0, 3).map((reply) => (
+          <li key={reply.text} className="text-sm text-paper/90">
+            {reply.user ? <span className="text-cyan">@{reply.user} </span> : null}
+            {reply.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }
 
 function Receipt({
@@ -830,6 +964,15 @@ function Receipt({
 
   return (
     <div className="fade-up space-y-3 px-4 py-4 sm:px-5 sm:pb-6">
+      <SponsorTrace result={result} />
+      {result.poster?.username ? <PosterChip poster={result.poster} /> : null}
+      {result.pushback?.length ? <Pushback replies={result.pushback} /> : null}
+      <AnswerCard result={result} />
+      <details className="fold rounded-2xl border border-line bg-[#10161d] px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium text-mist">All sources, the trace, and what could make this wrong</summary>
+        <div className="fold-body">
+        <div className="fold-inner">
+        <div className="mt-4 space-y-3">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <section className="rounded-2xl border border-line bg-[#10161d] p-4">
           <div className="flex items-end justify-between gap-3">
@@ -977,12 +1120,16 @@ function Receipt({
           </ul>
         </section>
       ) : null}
+        </div>
+        </div>
+        </div>
+      </details>
 
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setFlagOpen((open) => !open)}
-          className="inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm hover:border-amber/50 hover:text-amber"
+          className="btn-ghost inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm hover:border-amber/50 hover:text-amber"
         >
           <Flag className="h-3.5 w-3.5" />
           Disagree? Flag this result
@@ -990,7 +1137,7 @@ function Receipt({
         <button
           type="button"
           onClick={onCopy}
-          className="inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm text-mist hover:text-paper"
+          className="btn-ghost inline-flex items-center gap-2 rounded-full border border-line px-3 py-2 text-sm text-mist hover:text-paper"
         >
           <Clipboard className="h-3.5 w-3.5" />
           {copied ? 'Copied' : 'Copy receipt JSON'}
@@ -1050,16 +1197,28 @@ function Receipt({
 }
 
 const SPONSOR_CHIPS = {
+  see: 'SEE',
+  gemini: 'vision assist',
+  find: 'Treg Lens',
+  prove: 'You.com Search',
   youcom_search: 'You.com Search',
   youcom_contents: 'You.com Contents',
   youcom_answer: 'You.com Answer',
-  treg: 'Treg',
+  treg: 'Treg Lens',
+  treg_lens: 'Treg Lens',
+  treg_news: 'Treg News',
+  treg_web: 'Treg Web',
+  treg_profile: 'Treg X profile',
+  treg_replies: 'Treg X replies',
   x402: 'XDC x402',
 }
 
 function sponsorStat(stage) {
   const stats = stage.stats || {}
-  if (stage.id === 'youcom_search' || stage.sponsor === 'youcom_search') {
+  if (stage.id === 'vision' || stage.sponsor === 'see') {
+    return stats.provider || (stage.status === 'running' ? '' : 'image')
+  }
+  if (stage.id === 'youcom_search' || stage.sponsor === 'youcom_search' || stage.sponsor === 'prove') {
     return stats.results != null && stage.status !== 'running' ? `${stats.results} results` : ''
   }
   if (stage.id === 'youcom_contents' || stage.sponsor === 'youcom_contents') {
@@ -1068,9 +1227,16 @@ function sponsorStat(stage) {
   if (stage.id === 'youcom_answer' || stage.sponsor === 'youcom_answer') {
     return stage.status !== 'running' ? 'cited synthesis' : ''
   }
-  if (stage.id === 'reverse_image' || stage.sponsor === 'treg') {
+  if (stage.id === 'reverse_image' || stage.sponsor === 'treg' || stage.sponsor === 'treg_lens' || stage.sponsor === 'find') {
     if ((stage.detail || '').toLowerCase().includes('add key')) return 'add key'
-    return stats.matches != null && stage.status !== 'running' ? `${stats.matches} first seen` : ''
+    const count = stats.matches ?? stats.results
+    return count != null && stage.status !== 'running' ? `${count} matches` : ''
+  }
+  if (stage.id === 'treg_news' || stage.id === 'treg_web' || stage.sponsor === 'treg_news' || stage.sponsor === 'treg_web') {
+    return stats.results != null && stage.status !== 'running' ? `${stats.results} results` : ''
+  }
+  if (stage.id === 'treg_replies' || stage.sponsor === 'treg_replies') {
+    return stats.results != null && stage.status !== 'running' ? `${stats.results} replies` : ''
   }
   if (stage.id === 'x402' || stage.sponsor === 'x402') {
     return stats.mode === 'live' ? 'live' : 'test mode'
@@ -1079,7 +1245,8 @@ function sponsorStat(stage) {
 }
 
 function SponsorChip({ stage }) {
-  const name = SPONSOR_CHIPS[stage.sponsor] || SPONSOR_CHIPS[stage.id]
+  const research = (stage.id === 'youcom_answer' || stage.sponsor === 'youcom_answer') && /research/i.test(`${stage.label || ''} ${stage.detail || ''}`)
+  const name = research ? 'You.com Research' : SPONSOR_CHIPS[stage.id] || SPONSOR_CHIPS[stage.sponsor] || SPONSOR_CHIPS[stage.id]
   if (!name) return null
   const lit = stage.status === 'running' || stage.status === 'ok'
   const stat = sponsorStat(stage)
@@ -1092,6 +1259,8 @@ function SponsorChip({ stage }) {
         stage.status === 'running' && 'chip-live',
       )}
     >
+      {stage.status === 'running' ? <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" /> : null}
+      {stage.status === 'ok' ? <Check className="h-2.5 w-2.5" /> : null}
       {name}
       {stat ? <span className="normal-case tracking-normal text-paper/80">{stat}</span> : null}
       {typeof latency === 'number' && stage.status !== 'running' ? <span>{latency} ms</span> : null}
@@ -1120,30 +1289,6 @@ function SponsorStrip({ status, onX402 }) {
         Built with OpenCrawl
       </span>
     </div>
-  )
-}
-
-function X402Card({ status, receipt, onOpen }) {
-  const info = receipt?.x402 || status?.x402 || {}
-  const price = info.price_usdc || '0.02'
-  const testMode = (info.mode || 'test') !== 'live'
-  return (
-    <section className="mx-4 mt-4 rounded-2xl border border-line bg-[#10161d] p-4 sm:mx-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-lime">XDC x402</p>
-          <h3 className="mt-1 text-sm font-semibold">API access: ${price} per check via x402 on XDC</h3>
-          <p className="mt-1 max-w-xl text-sm leading-6 text-mist">
-            {testMode
-              ? 'Test mode. XDC_AI_KEY and XDC_PAYTO are not set, so this check was not charged. The challenge below is the same shape the live paywall returns.'
-              : 'The paywall is on. A check without a payment header receives HTTP 402. A payment header is accepted and labeled unsettled in this build.'}
-          </p>
-        </div>
-        <button type="button" onClick={onOpen} className="rounded-full border border-line px-3 py-1.5 text-sm hover:border-lime/40 hover:text-lime">
-          Show 402 challenge
-        </button>
-      </div>
-    </section>
   )
 }
 
@@ -1197,6 +1342,24 @@ function X402Dialog({ status, onClose }) {
       </div>
     </div>
   )
+}
+
+function TypeLine({ text }) {
+  const full = text || ''
+  const reduce = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const [shown, setShown] = useState(reduce ? full : '')
+  useEffect(() => {
+    if (reduce || full.length < 2) return undefined
+    let index = 0
+    const step = Math.max(1, Math.ceil(full.length / 42))
+    const timer = window.setInterval(() => {
+      index = Math.min(full.length, index + step)
+      setShown(full.slice(0, index))
+      if (index >= full.length) window.clearInterval(timer)
+    }, 18)
+    return () => window.clearInterval(timer)
+  }, [full, reduce])
+  return reduce || full.length < 2 ? full : shown
 }
 
 function CountUp({ value }) {
