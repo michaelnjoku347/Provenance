@@ -6,7 +6,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from app import credentials, samples, sponsors
+from app import config, credentials, samples, sponsors
 from app.main import app
 
 
@@ -20,6 +20,7 @@ def _isolated(monkeypatch, tmp_path):
         "XDC_AI_KEY",
         "XDC_PAYTO",
         "YDC_USE_RESEARCH",
+        "CHECK_DEADLINE_S",
     ):
         monkeypatch.setenv(name, "")
     monkeypatch.setenv("PROVENANCE_CACHE_DIR", str(tmp_path / "cache"))
@@ -1178,7 +1179,7 @@ def test_treg_news_web_and_x_are_separate_rows(client, monkeypatch):
         if "treg.to/call/" in url:
             tool = url.rsplit("/", 1)[-1]
             seen["tools"].append(tool)
-            assert timeout <= 25
+            assert timeout == config.check_deadline_s()
             if "serp.lens" in tool:
                 return 200, {
                     "output": {
@@ -1281,8 +1282,13 @@ def test_news_and_youcom_search_run_together(client, monkeypatch):
     assert any(source["url"] == "https://apnews.com/city" for source in body["sources"])
 
 
+def test_check_deadline_is_60_seconds():
+    assert config.CHECK_DEADLINE_S == 60
+    assert config.check_deadline_s() == 60
+
+
 def test_deadline_returns_partial_receipt(client, monkeypatch):
-    monkeypatch.setattr("app.pipeline.CHECK_DEADLINE_S", 0.35)
+    monkeypatch.setenv("CHECK_DEADLINE_S", "0.35")
     monkeypatch.setenv("YDC_API_KEY", "test-key")
     monkeypatch.setenv("TREG_API_KEY", "treg-test")
 
@@ -1307,7 +1313,8 @@ def test_deadline_returns_partial_receipt(client, monkeypatch):
     assert elapsed < 1.0
     assert body["verdict"]
     assert "Treg News" in body["timed_out"]
-    assert "20 second deadline" in body["deadline_note"]
+    assert "0.35 second deadline" in body["deadline_note"]
+    assert "20 second" not in body["deadline_note"]
     assert body["stages"]["youcom_search"]["status"] == "ok"
     time.sleep(1.0)
 
@@ -1390,6 +1397,7 @@ def test_iter_run_completes_with_stubbed_providers(monkeypatch):
         yield "answer", {"status": "ok", "detail": "Answer API.", "text": "Outlets reported the crowd.", "citations": [], "kind": "answer", "latency_ms": 1}
 
     monkeypatch.setattr("app.youcom.iter_investigate", investigate)
+    started = time.perf_counter()
     events = list(
         pipeline.iter_run(
             image=b"",
@@ -1397,7 +1405,10 @@ def test_iter_run_completes_with_stubbed_providers(monkeypatch):
             claim_text="A crowd gathered outside city hall this morning.",
         )
     )
+    # Every provider already returned, so the 60s budget must not be waited out.
+    assert time.perf_counter() - started < 3
     result = next(event["data"] for event in events if event["event"] == "result")
+    assert "deadline_note" not in result
     assert result["verdict"]
     assert result["receipt_id"]
     assert any(source["title"] == "City hall headline" for source in result["sources"])

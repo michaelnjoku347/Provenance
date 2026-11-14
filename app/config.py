@@ -70,4 +70,22 @@ def paywall_on() -> bool:
     return bool(key("XDC_AI_KEY") and xdc_payto())
 
 
+# Wall-clock budget for one check. Provider HTTP timeouts must not run longer than this.
+CHECK_DEADLINE_S = 60.0
+
+
+def check_deadline_s() -> float:
+    """Seconds allowed for one check. CHECK_DEADLINE_S in the environment overrides the 60s default."""
+    raw = key("CHECK_DEADLINE_S")
+    if not raw:
+        return CHECK_DEADLINE_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return CHECK_DEADLINE_S
+    if value <= 0:
+        return CHECK_DEADLINE_S
+    return value
+
+
 load_env()

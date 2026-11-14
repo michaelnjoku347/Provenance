@@ -12,8 +12,7 @@ from typing import Iterator
 
 from app import config, credentials, detector, explain, httputil, links, questions, reverse_image, samples, see, sponsors, store, treg, verdict, youcom
 
-# One wall-clock budget for the whole check. Provider timeouts must not add up past this.
-CHECK_DEADLINE_S = 20.0
+# One wall-clock budget for the whole check. config.check_deadline_s() reads CHECK_DEADLINE_S.
 
 
 def _stage_error(name: str) -> dict:
@@ -159,8 +158,20 @@ def _stage_row(result: dict) -> dict:
     }
 
 
+def _deadline_label() -> str:
+    seconds = config.check_deadline_s()
+    if seconds == int(seconds):
+        return str(int(seconds))
+    return f"{seconds:g}"
+
+
+def _deadline_note(names: list[str]) -> str:
+    who = ", ".join(str(name) for name in names if name)
+    return f"Stopped at the {_deadline_label()} second deadline with the best partial receipt. Timed out: {who}."
+
+
 def _remaining(clock: float) -> float:
-    return CHECK_DEADLINE_S - (time.monotonic() - clock)
+    return config.check_deadline_s() - (time.monotonic() - clock)
 
 
 def _open_pool() -> ThreadPoolExecutor:
@@ -321,9 +332,7 @@ def _assemble(image, media_type, claim_text, image_url, demo_id, filename, cache
     if timed_out:
         names = [str(name) for name in timed_out if name]
         result["timed_out"] = names
-        result["deadline_note"] = (
-            "Stopped at the 20 second deadline with the best partial receipt. Timed out: " + ", ".join(names) + "."
-        )
+        result["deadline_note"] = _deadline_note(names)
     explain.attach(result, image_url)
     try:
         answer = questions.compose(claim.get("text") or claim_text, result, web, reverse, subject or {})
