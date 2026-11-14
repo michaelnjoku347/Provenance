@@ -120,6 +120,7 @@ export default function App() {
   const [x402Open, setX402Open] = useState(false)
   const inputRef = useRef(null)
   const stageRef = useRef(null)
+  const sampleClaimRef = useRef('')
 
   useEffect(() => {
     setRecents(loadRecents())
@@ -197,7 +198,10 @@ export default function App() {
     clearPreview()
     setFile(next)
     setPreview(URL.createObjectURL(next))
+    setImageUrl('')
     setDemoId('')
+    setClaim((current) => (sampleClaimRef.current && current.trim() === sampleClaimRef.current.trim() ? '' : current))
+    sampleClaimRef.current = ''
     setError('')
     setResult(null)
   }
@@ -207,6 +211,7 @@ export default function App() {
     setFile(null)
     setDemoId(demo.id)
     setClaim(demo.claim || '')
+    sampleClaimRef.current = (demo.claim || '').trim()
     setImageUrl(demo.url || '')
     setPreview(`/api/demos/${demo.id}/image`)
     setError('')
@@ -231,22 +236,23 @@ export default function App() {
   async function startCheck(overrides = {}) {
     const body = { ...overrides }
     const usingDemo = body.demo_id || demoId
-    if (usingDemo && !body.image_base64) {
+    if (file && !body.image_base64 && !overrides.demo_id) {
+      body.image_base64 = await fileToBase64(file)
+      body.filename = file.name
+      body.media_type = file.type || 'image/jpeg'
+      body.claim = (overrides.claim ?? claim ?? '').trim()
+      delete body.demo_id
+      delete body.image_url
+    } else if (usingDemo && !body.image_base64) {
       body.demo_id = usingDemo
       if (!body.claim) body.claim = claim
       if (!body.image_url) body.image_url = imageUrl
     } else {
-      const chosen = file
       const typedClaim = (body.claim || claim || '').trim()
       const typedUrl = (body.image_url || imageUrl || '').trim()
-      if (!chosen && !body.image_base64 && !typedClaim && !typedUrl) {
+      if (!body.image_base64 && !typedClaim && !typedUrl) {
         setError('Add a claim, a link, an image, or a file.')
         return
-      }
-      if (chosen && !body.image_base64) {
-        body.image_base64 = await fileToBase64(chosen)
-        body.filename = chosen.name
-        body.media_type = chosen.type || 'image/jpeg'
       }
       if (!body.claim) body.claim = claim
       if (!body.image_url) body.image_url = imageUrl
@@ -436,7 +442,19 @@ export default function App() {
                 <Link2 className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-mist" />
                 <input
                   value={imageUrl}
-                  onChange={(e) => setImageUrl(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setImageUrl(value)
+                    if (!value.trim()) return
+                    if (file || demoId) {
+                      clearPreview()
+                      setFile(null)
+                      setDemoId('')
+                      setPreview('')
+                      setClaim((current) => (sampleClaimRef.current && current.trim() === sampleClaimRef.current.trim() ? '' : current))
+                      sampleClaimRef.current = ''
+                    }
+                  }}
                   inputMode="url"
                   spellCheck={false}
                   aria-label="Link"
@@ -483,6 +501,16 @@ export default function App() {
                 onChange={(e) => onPickFile(e.target.files?.[0])}
               />
             </label>
+            {file || imageUrl.trim() || claim.trim() || demoId ? (
+              <div className="flex items-center justify-between gap-2 px-1">
+                <p className="min-w-0 truncate text-xs text-mist">
+                  {file ? `Checking file: ${file.name}` : imageUrl.trim() ? `Checking link: ${imageUrl.trim()}` : demoId ? `Checking sample: ${selectedDemo?.title || 'sample'}` : 'Checking the claim you typed'}
+                </p>
+                <button type="button" onClick={resetDesk} className="btn-ghost shrink-0 rounded-full border border-line px-2.5 py-1 text-xs text-paper">
+                  Clear
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               disabled={busy}

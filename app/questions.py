@@ -7,7 +7,7 @@ import re
 
 from app import config
 from app.textutil import repair_text
-from app.verdict import FALSE, UNVERIFIED, host_of, is_credible, is_rumor, tier
+from app.verdict import FALSE, SUMMARIES, TRUE, UNVERIFIED, host_of, is_credible, is_rumor, tier
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
 _BAD = {
@@ -690,6 +690,19 @@ def compose(claim_text: str, decision: dict, web: dict, reverse: dict, subject: 
 
     if verdict == FALSE and "relationship" not in kinds:
         verdict = decision.get("verdict") or verdict
+    if verdict in {TRUE, FALSE} and sentence.strip() == SUMMARIES.get(verdict, ""):
+        synthesis = str((((web or {}).get("answer") or {}).get("text")) or "")
+        synthesis = re.sub(r"\s*\[page[^\]]*\]|\[\[[\d,\s]*\]\]|\[(\d+|[^\]]*)\]\([^)]*\)|\[[\d,\s]+\]|[#*_`]", "", synthesis)
+        lead = next(
+            (
+                part.strip()
+                for part in re.split(r"(?<=[.!?])\s+", " ".join(synthesis.split()))
+                if 20 < len(part.strip()) < 280 and "|" not in part
+            ),
+            "",
+        )
+        if lead:
+            sentence = lead
     return {
         "verdict": verdict,
         "confidence": confidence,
